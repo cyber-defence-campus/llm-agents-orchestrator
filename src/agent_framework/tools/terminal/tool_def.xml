@@ -1,0 +1,26 @@
+<action_definition>
+  <name>run_shell_command</name>
+  <description>Run shell commands in a persistent session. Supports standard bash features.</description>
+  <spec>
+    <parameters>
+      <parameter=command type="string" required="true">
+        <description>The command line string to execute.</description>
+      </parameter>
+      <parameter=require_input type="boolean" required="false">
+        <description>Set to true if sending input to an already running interactive process.</description>
+      </parameter>
+      <parameter=exec_timeout type="number" required="false">
+        <description>Execution time limit in seconds.</description>
+      </parameter>
+      <parameter=session_id type="string" required="false">
+        <description>Session identifier to target specific terminals (Default: Your Agent ID). Use this to create separate parallel sessions.</description>
+      </parameter>
+      <parameter=suppress_newline type="boolean" required="false">
+        <description>If true, sends the command without a trailing newline (useful for TUI interaction).</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Execution result including stdout, stderr, and exit status.</description>
+    </returns>
+  </spec>
+</action_definition>

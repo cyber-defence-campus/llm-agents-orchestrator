@@ -1,0 +1,90 @@
+# Standalone docker-compose for agent-orchestrator
+# This allows running the orchestrator independently
+
+services:
+  redis:
+    image: "redis:7-alpine"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - orchestrator_net
+
+  # Optional: Build the sandbox container image
+  sandbox-image:
+    image: sandbox:local
+    build:
+      context: ..
+      dockerfile: llm-agents-sandbox-runtime/containers/Dockerfile
+    profiles:
+      - with-sandbox
+
+  # Optional: Sandbox service for tool execution
+  sandbox-service:
+    build:
+      context: ..
+      dockerfile: llm-agents-sandbox-runtime/Dockerfile
+    ports:
+      - "${SANDBOX_PORT:-8000}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs:/app/logs
+    environment:
+      - AGENT_SANDBOX_IMAGE=sandbox:local
+      - AGENT_NETWORK_NAME=orchestrator_net
+    depends_on:
+      redis:
+        condition: service_healthy
+      sandbox-image:
+        condition: service_started
+    networks:
+      - orchestrator_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles:
+      - with-sandbox
+
+  # The main agent manager service
+  agent-manager:
+    build:
+      context: ..
+      dockerfile: llm-agents-orchestrator/Dockerfile
+    ports:
+      - "${AGENT_MANAGER_PORT:-8083}:8083"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - PYTHONPATH=/app:/app/src
+      - REDIS_HOST=redis
+      - AGENT_MODEL=${AGENT_MODEL:-gemini/gemini-3-flash-preview}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Optional: Sandbox Configuration
+      - AGENT_SANDBOX_MODE=${AGENT_SANDBOX_MODE:-false}
+      # Optional: Point to sandbox if running with-sandbox profile
+      - AGENT_SANDBOX_URL=${AGENT_SANDBOX_URL:-http://sandbox-service:8000}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - orchestrator_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  orchestrator_net:
+    driver: bridge
+    name: orchestrator_net

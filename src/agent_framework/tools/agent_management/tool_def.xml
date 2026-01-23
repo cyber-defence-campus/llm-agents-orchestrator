@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tools>
+  <tool name="spawn_sub_agent">
+    <description>Deploy a new autonomous worker agent to handle a specific sub-task.</description>
+    <details>Use this to parallelize work. The new agent acts as a subordinate worker.
+    You define the scope and goal.
+    
+    Tip: You can use enter_wait_mode after spawning to wait for the agent to complete, instead of polling for updates. The agent will notify you via inter_agent_message when done.
+    </details>
+    <parameters>
+      <parameter=task_description type="string" required="true">
+        <description>Detailed instructions for the worker agent.</description>
+      </parameter>
+      <parameter=agent_name type="string" required="true">
+        <description>Unique identifier for the worker. Use a concise, human-readable name (e.g., 'Web Scanner', 'Login Tester'). Avoid including full IP addresses or long strings in the name.</description>
+      </parameter>
+      <parameter=ui_summary type="string" required="false">
+        <description>Short display string for the dashboard.</description>
+      </parameter>
+      <parameter=capabilities type="string" required="false">
+        <description>Comma-separated list of required skill modules (e.g. "researcher,coder").</description>
+      </parameter>
+      <parameter=share_history type="boolean" required="false">
+        <description>Whether to provide conversation context to the worker (Default: true).</description>
+      </parameter>
+      <parameter=model_override type="string" required="false">
+        <description>Specific LLM model to use.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Initialization result with agent_id.</description>
+    </returns>
+  </tool>
+
+  <tool name="complete_assignment">
+    <description>Formally complete the assigned task and report back.</description>
+    <details>This ends the agent's execution. Provide a comprehensive report.</details>
+    <parameters>
+      <parameter=summary type="string" required="true">
+        <description>Executive summary of results.</description>
+      </parameter>
+      <parameter=artifacts type="string" required="false">
+        <description>List of key findings or generated data points.</description>
+      </parameter>
+      <parameter=discovered_items type="string" required="false">
+        <description>Alias for artifacts (legacy support).</description>
+      </parameter>
+      <parameter=next_steps type="string" required="false">
+        <description>Actionable recommendations for the supervisor.</description>
+      </parameter>
+      <parameter=is_success type="boolean" required="false">
+        <description>Did the agent achieve its goal? (Default: true)</description>
+      </parameter>
+      <parameter=notify_supervisor type="boolean" required="false">
+        <description>Send report to parent agent? (Default: true)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Completion status.</description>
+    </returns>
+  </tool>
+
+  <tool name="dispatch_agent_msg">
+    <description>Send a direct message to another agent.</description>
+    <parameters>
+      <parameter=recipient_id type="string" required="true">
+        <description>ID of the target agent.</description>
+      </parameter>
+      <parameter=body type="string" required="true">
+        <description>Message content.</description>
+      </parameter>
+      <parameter=category type="string" required="false">
+        <description>Type: "info", "query", "instruction" (Default: "info").</description>
+      </parameter>
+      <parameter=urgency type="string" required="false">
+        <description>Priority: "low", "normal", "high", "critical".</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Delivery status.</description>
+    </returns>
+  </tool>
+
+  <tool name="enter_wait_mode">
+    <description>Pause execution until an external signal is received.</description>
+    <parameters>
+      <parameter=wait_reason type="string" required="false">
+        <description>Why are we waiting?</description>
+      </parameter>
+      <parameter=max_wait_seconds type="integer" required="false">
+        <description>Auto-wake timeout in seconds.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Wait status.</description>
+    </returns>
+  </tool>
+
+  <tool name="inspect_agent_tree">
+    <description>View the hierarchy of active agents.</description>
+    <returns type="Dict[str, Any]">
+      <description>Visual representation of the agent graph.</description>
+    </returns>
+  </tool>
+
+  <tool name="terminate_agent">
+    <description>Stop or remove an agent.</description>
+    <parameters>
+      <parameter=target_id type="string" required="true">
+        <description>ID of the agent to remove.</description>
+      </parameter>
+      <parameter=justification type="string" required="false">
+        <description>Reason for termination.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Action result.</description>
+    </returns>
+  </tool>
+</tools>

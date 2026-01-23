@@ -1,0 +1,40 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "llm-agents-orchestrator"
+version = "0.1.0"
+description = "An agent orchestration framework and service."
+authors = ["Daniel López Gala <daniel.lopezgala@ar.admin.ch>"]
+license = "MIT"
+packages = [{ include = "agent_framework", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "0.115.5"
+uvicorn = "0.29.0"
+jinja2 = "^3.1.4"
+pydantic = "^2.0"
+redis = "^5.0"
+openai = "^1.0"
+docker = "^7.0"
+python-json-logger = "^2.0.0"
+litellm = { version = "~1.78.7", extras = ["proxy"] }
+tenacity = "^9.0.0"
+playwright = "^1.48.0"
+ipython = "^8.18.0"
+libtmux = "^0.46.2"
+httpx = {extras = ["http2"], version = "^0.28.1"}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.23"
+black = "^24.0"
+mypy = "^1.0"
+ruff = "^0.1.0"
+pytest-cov = "^7.0.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
