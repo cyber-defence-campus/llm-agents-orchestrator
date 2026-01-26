@@ -1,26 +1,32 @@
 <action_definition>
   <name>run_shell_command</name>
-  <description>Run shell commands in a persistent session. Supports standard bash features.</description>
+  <description>Run shell commands in a persistent terminal session. Each session_id creates an isolated shell environment that persists between calls.</description>
   <spec>
     <parameters>
       <parameter=command type="string" required="true">
-        <description>The command line string to execute.</description>
+        <description>The command to execute. To interrupt a running command, send the literal string "^C" (caret + uppercase C).</description>
       </parameter>
       <parameter=require_input type="boolean" required="false">
-        <description>Set to true if sending input to an already running interactive process.</description>
+        <description>Set to true when sending input to a process that is already running in the terminal (e.g., responding to a password prompt, or sending data to an interactive program). When false (default), the command starts a new execution. If the session is busy with a running command and this is false, you will get an error.</description>
       </parameter>
       <parameter=exec_timeout type="number" required="false">
-        <description>Execution time limit in seconds.</description>
+        <description>Maximum seconds to wait for command completion. If exceeded, the command continues running in background and you get a "running" status. Default: 30 seconds.</description>
       </parameter>
       <parameter=session_id type="string" required="false">
-        <description>Session identifier to target specific terminals (Default: Your Agent ID). Use this to create separate parallel sessions.</description>
+        <description>Unique identifier for the terminal session. Use different session_ids to run commands in parallel! For example, use "scan1" for a long-running nmap scan, "main" for quick commands, and "exploit" for exploitation. Each session_id creates a completely isolated shell. Default: your agent ID.</description>
       </parameter>
       <parameter=suppress_newline type="boolean" required="false">
         <description>If true, sends the command without a trailing newline (useful for TUI interaction).</description>
       </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
-      <description>Execution result including stdout, stderr, and exit status.</description>
+      <description>Result containing: content (stdout), status ("completed" or "running"), exit_code (integer or null if running), terminal_id, and error (if any).</description>
     </returns>
   </spec>
+  <usage_notes>
+    <note>PARALLEL SESSIONS: To run long commands (nmap, ffuf, gobuster) without blocking, use a dedicated session_id like "scan". Then use your default session for other work.</note>
+    <note>INTERRUPT BLOCKING COMMANDS: If a session is busy, send command="^C" to interrupt it. This sends Ctrl+C to the running process.</note>
+    <note>INTERACT WITH RUNNING PROCESS: Use require_input=true to send input to an already-running process (e.g., password prompts, interactive menus).</note>
+    <note>SESSION IS BUSY ERROR: This means a command is still running in that session. Either: (1) wait for it, (2) send "^C" to interrupt, or (3) use a different session_id.</note>
+  </usage_notes>
 </action_definition>
