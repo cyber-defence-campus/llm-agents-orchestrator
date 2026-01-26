@@ -10,7 +10,7 @@
         <description>Set to true when sending input to a process that is already running in the terminal (e.g., responding to a password prompt, or sending data to an interactive program). When false (default), the command starts a new execution. If the session is busy with a running command and this is false, you will get an error.</description>
       </parameter>
       <parameter=exec_timeout type="number" required="false">
-        <description>Maximum seconds to wait for command completion. If exceeded, the command continues running in background and you get a "running" status. Default: 30 seconds.</description>
+        <description>Maximum seconds to wait for command completion. If you expect a long output, set this to a higher value. If a session is busy, you can 'join' it by sending an empty string or comment (starting with #) as the command.</description>
       </parameter>
       <parameter=session_id type="string" required="false">
         <description>Unique identifier for the terminal session. Use different session_ids to run commands in parallel! For example, use "scan1" for a long-running nmap scan, "main" for quick commands, and "exploit" for exploitation. Each session_id creates a completely isolated shell. Default: your agent ID.</description>
@@ -25,8 +25,9 @@
   </spec>
   <usage_notes>
     <note>PARALLEL SESSIONS: To run long commands (nmap, ffuf, gobuster) without blocking, use a dedicated session_id like "scan". Then use your default session for other work.</note>
+    <note>WAITING FOR OUTPUT: Use 'exec_timeout' to wait for a command to finish. If a command is already running (busy), send an empty command or comment ("# waiting") to wait for it to complete.</note>
     <note>INTERRUPT BLOCKING COMMANDS: If a session is busy, send command="^C" to interrupt it. This sends Ctrl+C to the running process.</note>
     <note>INTERACT WITH RUNNING PROCESS: Use require_input=true to send input to an already-running process (e.g., password prompts, interactive menus).</note>
-    <note>SESSION IS BUSY ERROR: This means a command is still running in that session. Either: (1) wait for it, (2) send "^C" to interrupt, or (3) use a different session_id.</note>
+    <note>SESSION IS BUSY ERROR: This means a command is still running. You can: (1) Wait for it by sending an empty command (""), (2) Send "^C" to interrupt, or (3) Use a different session_id.</note>
   </usage_notes>
 </action_definition>

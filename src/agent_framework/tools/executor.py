@@ -531,7 +531,7 @@ async def _execute_tool_locally(
 
     try:
         if needs_agent_state(tool_name):
-            if agent_state is None and not sandbox_mode:
+            if agent_state is None and not sandbox_mode_enabled:
                 raise ValueError(
                     f"Tool '{tool_name}' requires agent_state but none was provided."
                 )
@@ -606,16 +606,16 @@ def validate_tool_availability(tool_name: str | None) -> tuple[bool, str]:
 
 
 async def execute_tool_with_validation(
-    tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
+    target_tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
     # Validates tool name before attempting execution.
-    is_valid, error_msg = validate_tool_availability(tool_name)
+    is_valid, error_msg = validate_tool_availability(target_tool_name)
     if not is_valid:
         return {"error": error_msg, "type": "ValidationError"}
 
-    assert tool_name is not None
+    assert target_tool_name is not None
 
-    return await execute_tool(tool_name, agent_state, **kwargs)
+    return await execute_tool(target_tool_name, agent_state, **kwargs)
 
 
 async def execute_tool_invocation(

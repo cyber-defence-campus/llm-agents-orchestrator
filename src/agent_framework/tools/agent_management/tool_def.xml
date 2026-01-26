@@ -82,7 +82,7 @@
   </tool>
 
   <tool name="enter_wait_mode">
-    <description>Pause execution until an external signal is received.</description>
+    <description>Pause execution until an external signal is received (user message, agent message). WARNING: Do NOT use this to wait for terminal commands to finish. Use 'exec_timeout' in run_shell_command instead.</description>
     <parameters>
       <parameter=wait_reason type="string" required="false">
         <description>Why are we waiting?</description>

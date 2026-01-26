@@ -299,6 +299,8 @@ class BaseAgent:
                 # Wake up if sleeping
                 if self.context.waiting_for_input:
                     self.context.resume()
+                    self.context.status = "running"
+                    db.update_agent_status(self.context.agent_id, "running")
 
     def _persist_state(self, status_override: Optional[str] = None):
         if status_override:

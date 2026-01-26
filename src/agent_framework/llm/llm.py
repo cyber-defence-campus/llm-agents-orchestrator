@@ -458,19 +458,19 @@ class LLM:
                 prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
                 if prompt_tokens_details:
                     if isinstance(prompt_tokens_details, dict):
-                        cached_tokens = prompt_tokens_details.get("cached_tokens", 0)
+                        cached_tokens = prompt_tokens_details.get("cached_tokens") or 0
                         cache_creation_tokens = prompt_tokens_details.get(
-                            "cache_creation_input_tokens", 0
-                        )
+                            "cache_creation_input_tokens"
+                        ) or 0
                     else:
                         cached_tokens = getattr(
                             prompt_tokens_details, "cached_tokens", 0
-                        )
+                        ) or 0
                         cache_creation_tokens = getattr(
                             prompt_tokens_details,
                             "cache_creation_input_tokens",
                             0,
-                        )
+                        ) or 0
 
                 self._total_stats.input_tokens += input_tokens
                 self._total_stats.output_tokens += output_tokens

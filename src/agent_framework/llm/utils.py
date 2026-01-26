@@ -3,7 +3,9 @@ import re
 from typing import Any, List, Dict, Optional, Union
 
 # Regex patterns for tool parsing
-TOOL_CALL_PATTERN = re.compile(r"<function=([^>]+)>\n?(.*?)</function>", re.DOTALL)
+TOOL_CALL_PATTERN = re.compile(
+    r"<function=([^>]+)>\n?(.*?)</function(?:=[^>]+)?>", re.DOTALL
+)
 PARAM_PATTERN = re.compile(
     r"<parameter(?:=| name=[\"'])([^>\"']+)[\"']?>(.*?)</parameter>", re.DOTALL
 )

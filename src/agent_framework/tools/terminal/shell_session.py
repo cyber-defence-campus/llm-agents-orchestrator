@@ -130,15 +130,23 @@ class ShellExecutor:
                 "terminal_id": self.id,
             }
 
-        # If session is busy, only allow input to the running process
-        if self.busy and not is_input:
-            return {
-                "error": "Session is busy with a running command (e.g., blocking call like 'top' or 'nmap'). "
-                "Use 'require_input=True' to interact with it, send '^C' to interrupt, "
-                "or use a different terminal_id.",
-                "status": "error",
-                "terminal_id": self.id,
-            }
+        # If session is busy, we check if the user is just trying to wait
+        # "Waiting" is defined as sending an empty command or a comment
+        is_wait_command = not cmd.strip() or cmd.strip().startswith("#")
+        
+        if self.busy:
+            if is_wait_command and not is_input:
+                # User wants to wait for the running command to finish
+                return await self._wait_for_marker(timeout)
+            elif not is_input:
+                # User is trying to run a new command while busy
+                return {
+                    "error": "Session is busy with a running command (e.g., blocking call like 'top'). "
+                    "Use 'require_input=True' to interact with it, send '^C' to interrupt, "
+                    "or use a different terminal_id.",
+                    "status": "error",
+                    "terminal_id": self.id,
+                }
 
         if is_input:
             self.pane.send_keys(cmd, enter=not no_enter)
@@ -162,6 +170,7 @@ class ShellExecutor:
 
         try:
             if not cmd.strip():
+                # Should not happen here due to check in run(), but safe fallback
                 self.busy = False
                 return {
                     "content": self._sanitize_output(self._read_buffer()),
@@ -173,8 +182,8 @@ class ShellExecutor:
 
             # Generate unique marker for this command
             marker = self._generate_marker()
-            start_marker = f"{marker}_START"
-            end_marker = f"{marker}_END"
+            self.current_start_marker = f"{marker}_START"
+            self.current_end_marker = f"{marker}_END"
 
             # Clear history to avoid stale data
             self.pane.cmd("clear-history")
@@ -183,58 +192,75 @@ class ShellExecutor:
             # Build wrapped command: echo start marker, run command, echo end marker with exit code
             # Using a compound command ensures we capture the actual exit code
             # We add a newline before the end marker to handle heredocs correctly
-            wrapped_cmd = f"echo '{start_marker}'; {cmd}\necho '{end_marker}'$?"
+            wrapped_cmd = f"echo '{self.current_start_marker}'; {cmd}\necho '{self.current_end_marker}'$?"
             self.pane.send_keys(wrapped_cmd, enter=True)
 
-            start_ts = time.time()
+            return await self._wait_for_marker(timeout)
 
-            while (time.time() - start_ts) < timeout:
-                await asyncio.sleep(0.15)
-                output = self._read_buffer()
-
-                # Look for our end marker with exit code
-                end_pattern = rf"{re.escape(end_marker)}(\d+)"
-                match = re.search(end_pattern, output)
-
-                if match:
-                    exit_code = int(match.group(1))
-
-                    # Extract content between start and end markers
-                    start_pattern = rf"{re.escape(start_marker)}\n?"
-                    start_match = re.search(start_pattern, output)
-
-                    if start_match:
-                        # Content is between end of start marker and start of end marker
-                        content_start = start_match.end()
-                        content_end = match.start()
-                        content = output[content_start:content_end]
-
-                        # Clean up the content
-                        content = content.strip()
-                        content = self._sanitize_output(content)
-
-                        self.busy = False
-                        return {
-                            "content": content,
-                            "status": "completed",
-                            "exit_code": exit_code,
-                            "working_dir": self.work_dir,
-                            "terminal_id": self.id,
-                        }
-
-            # Timeout - sanitize output to hide any markers
-            # NOTE: We leave self.busy = True because the command is likely still running
-            return {
-                "content": self._sanitize_output(self._read_buffer()),
-                "status": "running",
-                "exit_code": None,
-                "working_dir": self.work_dir,
-                "terminal_id": self.id,
-            }
         except Exception:
             # If a crash happens, we reset busy state to allow recovery attempts
             self.busy = False
             raise
+
+    async def _wait_for_marker(self, timeout: float) -> dict:
+        """Wait for the active command marker to appear."""
+        start_ts = time.time()
+        
+        # Inherit markers from instance state
+        start_marker = getattr(self, "current_start_marker", "")
+        end_marker = getattr(self, "current_end_marker", "")
+        
+        if not start_marker or not end_marker:
+            # No active command to wait for?
+            self.busy = False
+            return {
+                "error": "No active command context to wait for",
+                "status": "error"
+            }
+
+        while (time.time() - start_ts) < timeout:
+            await asyncio.sleep(0.15)
+            output = self._read_buffer()
+
+            # Look for our end marker with exit code
+            end_pattern = rf"{re.escape(end_marker)}(\d+)"
+            match = re.search(end_pattern, output)
+
+            if match:
+                exit_code = int(match.group(1))
+
+                # Extract content between start and end markers
+                start_pattern = rf"{re.escape(start_marker)}\n?"
+                start_match = re.search(start_pattern, output)
+
+                if start_match:
+                    # Content is between end of start marker and start of end marker
+                    content_start = start_match.end()
+                    content_end = match.start()
+                    content = output[content_start:content_end]
+
+                    # Clean up the content
+                    content = content.strip()
+                    content = self._sanitize_output(content)
+
+                    self.busy = False
+                    return {
+                        "content": content,
+                        "status": "completed",
+                        "exit_code": exit_code,
+                        "working_dir": self.work_dir,
+                        "terminal_id": self.id,
+                    }
+
+        # Timeout - sanitize output to hide any markers
+        # NOTE: We leave self.busy = True because the command is likely still running
+        return {
+            "content": self._sanitize_output(self._read_buffer()),
+            "status": "running",
+            "exit_code": None,
+            "working_dir": self.work_dir,
+            "terminal_id": self.id,
+        }
 
     def _read_buffer(self) -> str:
         """Read the current tmux pane buffer."""

@@ -383,3 +383,73 @@ class TestRealWorldScenarios:
         
         # Should not get a busy error
         assert input_result.get("status") != "error" or "busy" not in input_result.get("error", "").lower()
+
+class TestWaitingFunctionality:
+    """Tests for the new 'waiting' capability in ShellExecutor."""
+
+    @pytest.fixture
+    async def executor(self):
+        """Create a ShellExecutor for testing."""
+        exc = ShellExecutor("wait-test")
+        await asyncio.sleep(0.3)
+        yield exc
+        exc.terminate()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_success(self, executor):
+        """
+        Test waiting for a running command using a comment/empty command.
+        """
+        import time
+        
+        # Start a command that takes ~2 seconds
+        # Using session_id="wait-test" implicit in executor
+        # We start it with a short timeout so it returns 'running'
+        result1 = await executor.run("sleep 2; echo 'done'", timeout=0.1)
+        assert result1["status"] == "running"
+        assert executor.busy is True
+        
+        # Now "wait" for it by sending a comment
+        start_wait = time.time()
+        result2 = await executor.run("# wait for it", timeout=5.0)
+        duration = time.time() - start_wait
+        
+        # Should have waited effectively
+        assert duration >= 1.0 
+        assert result2["status"] == "completed"
+        assert "done" in result2["content"]
+        assert executor.busy is False
+
+    @pytest.mark.asyncio
+    async def test_wait_times_out(self, executor):
+        """
+        Test that the wait logic respects the new timeout.
+        """
+        import time
+        
+        # Start a very long command
+        await executor.run("sleep 10", timeout=0.1)
+        
+        # Wait for only 1 second
+        start_wait = time.time()
+        result2 = await executor.run("", timeout=1.0) # Empty string also triggers wait
+        duration = time.time() - start_wait
+        
+        # Should timeout but update content
+        assert duration < 2.0
+        assert result2["status"] == "running"
+        assert executor.busy is True
+
+    @pytest.mark.asyncio
+    async def test_busy_error_for_real_commands(self, executor):
+        """
+        Verify we still get 'busy' error if we try to run a REAL command
+        while busy.
+        """
+        await executor.run("sleep 5", timeout=0.1)
+        
+        # Try to run 'echo' logic
+        result = await executor.run("echo 'no wait'", timeout=1.0)
+        
+        assert result["status"] == "error"
+        assert "busy" in result.get("error", "").lower()
