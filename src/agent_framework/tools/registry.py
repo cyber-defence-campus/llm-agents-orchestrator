@@ -56,11 +56,16 @@ class ToolRegistry:
     def list_tools(self) -> List[ToolDef]:
         return list(self._registry.values())
 
-    def generate_prompt_xml(self, sandbox_active: bool = False) -> str:
+    def generate_prompt_xml(
+        self, sandbox_active: bool = False, exclude: Optional[List[str]] = None
+    ) -> str:
         """Constructs the XML prompt for tool definitions."""
         valid_tools = [
             t for t in self._registry.values() if (not t["sandbox"]) or sandbox_active
         ]
+
+        if exclude:
+            valid_tools = [t for t in valid_tools if t["name"] not in exclude]
 
         # Sort for stability
         valid_tools.sort(key=lambda x: x["name"])
@@ -135,10 +140,10 @@ def should_execute_in_sandbox(name: str) -> bool:
     return t["sandbox"] if t else True
 
 
-def get_tools_prompt() -> str:
+def get_tools_prompt(exclude: Optional[List[str]] = None) -> str:
     # Use env var as proxy for sandbox availability
     active = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
-    return ToolRegistry.instance().generate_prompt_xml(active)
+    return ToolRegistry.instance().generate_prompt_xml(active, exclude=exclude)
 
 
 def clear_registry():
