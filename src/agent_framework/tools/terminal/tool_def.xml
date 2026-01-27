@@ -24,6 +24,7 @@
     </returns>
   </spec>
   <usage_notes>
+    <note>CRITICAL: Always check the `status` field in the result. If `status` is "running", the command has NOT finished and the session is BUSY. Do NOT send a new command to a busy session unless using `require_input=true` or sending an empty command/comment to wait.</note>
     <note>PARALLEL SESSIONS: To run long commands (nmap, ffuf, gobuster) without blocking, use a dedicated session_id like "scan". Then use your default session for other work.</note>
     <note>WAITING FOR OUTPUT: Use 'exec_timeout' to wait for a command to finish. If a command is already running (busy), send an empty command or comment ("# waiting") to wait for it to complete.</note>
     <note>INTERRUPT BLOCKING COMMANDS: If a session is busy, send command="^C" to interrupt it. This sends Ctrl+C to the running process.</note>

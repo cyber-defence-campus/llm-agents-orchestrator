@@ -19,7 +19,7 @@ class TestPromptTemplateOverride:
     def test_external_template_takes_priority(self):
         """Verify external templates override default templates with the same name."""
         with tempfile.TemporaryDirectory() as external_dir:
-            # Create directory structure mimicking tactics prompts
+            # Create directory structure mimicking prompts
             coordination_dir = Path(external_dir) / "coordination"
             coordination_dir.mkdir()
 
