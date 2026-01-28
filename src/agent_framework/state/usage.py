@@ -101,28 +101,59 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
     base = f"platform:usage:job:{job_id}:global"
     stats = _fetch_hash(client, base)
 
-    # Agents Stats
+    # Model Stats
+    models_stats = {}
+    try:
+        models = client.smembers(f"platform:usage:job:{job_id}:used_models")
+        for m in models:
+            models_stats[m] = _fetch_hash(client, f"platform:usage:job:{job_id}:models:{m}")
+    except Exception:
+        pass
+
+    # Agents Stats with name and model from agent state
     agents_stats = {}
     try:
         # Find all agents for this job
-        # usage.py doesn't have direct access to PREFIX_JOB_AGENTS constant easily without circular import
-        # but we know the pattern: "platform:job_agents:{job_id}"
         job_agents_key = f"platform:job_agents:{job_id}"
         agent_ids = client.smembers(job_agents_key)
 
         usage_base_key = f"platform:usage:job:{job_id}"
 
+        # Get agent graph data for name and model
+        agent_graph_data = {}
+        try:
+            for aid in agent_ids:
+                node_raw = client.hget("agent_graph:nodes", aid)
+                if node_raw:
+                    import json
+                    node_data = json.loads(node_raw)
+                    agent_graph_data[aid] = {
+                        "name": node_data.get("name", aid),
+                        "model": node_data.get("model", "Unknown"),
+                    }
+        except Exception:
+            pass
+
         for agent_id in agent_ids:
             agent_key = f"{usage_base_key}:agents:{agent_id}"
             agent_data = _fetch_hash(client, agent_key)
             if agent_data:
-                agents_stats[agent_id] = {"stats": agent_data}
+                # Get agent name and model from agent graph
+                graph_info = agent_graph_data.get(agent_id, {})
+                agent_name = graph_info.get("name", agent_id)
+                agent_model = graph_info.get("model", "Unknown")
+
+                agents_stats[agent_id] = {
+                    "name": agent_name,
+                    "model": agent_model,
+                    "stats": agent_data,
+                }
 
     except Exception as e:
         logger.warning(f"Failed to fetch agent stats for job {job_id}: {e}")
 
-    # To match legacy structure if needed, or just return flattened
     stats["agents_stats"] = agents_stats
+    stats["models_stats"] = models_stats
     return stats
 
 
