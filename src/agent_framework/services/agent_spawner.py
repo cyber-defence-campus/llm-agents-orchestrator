@@ -12,6 +12,7 @@ from agent_framework.services import agent_service
 
 logger = logging.getLogger("agent_framework.services.agent_spawner")
 _agent_starter: Callable[[dict, dict], tuple[str, Any]] | None = None
+_routing_func: Callable[[str, str, str | None], tuple[str, str]] | None = None
 
 
 def set_agent_starter(starter_func: Callable[[dict, dict], tuple[str, Any]]) -> None:
@@ -24,12 +25,31 @@ def set_agent_starter(starter_func: Callable[[dict, dict], tuple[str, Any]]) -> 
     logger.info("Agent spawner initialized with starter function")
 
 
-def spawn_agent(
+def set_routing_function(
+    routing_func: Callable[[str, str, str | None], tuple[str, str]] | None
+) -> None:
+    """
+    Register an optional routing function for model selection.
+    
+    The routing function should accept (provider: str, task: str, api_key: str | None)
+    and return (model: str, reasoning_effort: str).
+    
+    This allows domain-specific layers to inject model selection logic without
+    the orchestrator knowing about domain specifics.
+    """
+    global _routing_func
+    _routing_func = routing_func
+    if routing_func:
+        logger.info("Routing function registered")
+    else:
+        logger.info("Routing function cleared")
+
+
+async def spawn_agent(
     parent_state: Any,
     name: str,
     task: str,
-    short_task: str
-    | None = None,  # TODO: In the future, short task is better than task to show in CLI/UI.
+    short_task: str | None = None,
     prompt_modules: list[str] | None = None,
     model: str | None = None,
     inherit_context: bool = True,
@@ -60,18 +80,32 @@ def spawn_agent(
         inherited_model = None
         inherited_api_key = None
         inherited_reasoning_effort = None
+        provider = None
 
         if hasattr(parent_state, "sandbox_info") and parent_state.sandbox_info:
             job_id = parent_state.sandbox_info.get("job_id")
-            # Inherit model configuration from parent (which comes from job_config)
             inherited_model = parent_state.sandbox_info.get("model")
             inherited_api_key = parent_state.sandbox_info.get("api_key")
-            inherited_reasoning_effort = parent_state.sandbox_info.get(
-                "reasoning_effort"
-            )
+            inherited_reasoning_effort = parent_state.sandbox_info.get("reasoning_effort")
+            provider = parent_state.sandbox_info.get("provider")
 
-        # Use explicitly provided model, or inherit from parent
+        # Determine effective model
         effective_model = model or inherited_model
+        effective_reasoning_effort = inherited_reasoning_effort
+
+        # Apply routing if available and no explicit model override
+        if not model and provider and _routing_func:
+            try:
+                effective_model, effective_reasoning_effort = await _routing_func(
+                    provider, task, inherited_api_key
+                )
+                logger.info(
+                    f"Routing: Assigned model '{effective_model}' ({effective_reasoning_effort}) for '{name}'"
+                )
+            except Exception as e:
+                logger.error(f"Routing failed: {e}. Falling back to inherited model.")
+                effective_model = model or inherited_model
+                effective_reasoning_effort = inherited_reasoning_effort
 
         # Build context if inheriting
         context = None
@@ -80,6 +114,17 @@ def spawn_agent(
             if hierarchy:
                 context = "Current Agent Hierarchy:\n"
                 context += agent_service.format_agent_hierarchy(hierarchy)
+
+        # Build sandbox_info for nested spawns
+        sandbox_info = {"job_id": job_id} if job_id else {}
+        if inherited_model:
+            sandbox_info["model"] = inherited_model
+        if inherited_api_key:
+            sandbox_info["api_key"] = inherited_api_key
+        if effective_reasoning_effort:
+            sandbox_info["reasoning_effort"] = effective_reasoning_effort
+        if provider:
+            sandbox_info["provider"] = provider
 
         # Create agent config
         config_result, agent_state = agent_service.create_agent_config(
@@ -91,8 +136,11 @@ def spawn_agent(
             model=effective_model,
             context=context,
             api_key=inherited_api_key,
-            reasoning_effort=inherited_reasoning_effort,
+            reasoning_effort=effective_reasoning_effort,
         )
+        
+        # Update the agent_state's sandbox_info
+        agent_state.sandbox_info = sandbox_info
 
         # Register in graph
         agent_service.register_agent_in_graph(
@@ -129,3 +177,8 @@ def spawn_agent(
 def is_spawner_available() -> bool:
     """Check if the agent spawner is available."""
     return _agent_starter is not None
+
+
+def is_routing_available() -> bool:
+    """Check if the routing function is available."""
+    return _routing_func is not None

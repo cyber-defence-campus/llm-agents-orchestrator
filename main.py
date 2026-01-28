@@ -9,8 +9,14 @@ by integration layers for specialized use cases.
 import asyncio
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Any
+
+_script_dir = os.path.dirname(__file__)
+_extensions_path = os.path.abspath(os.path.join(_script_dir, ".."))
+if os.path.isdir(os.path.join(_extensions_path, "rt_automation_tactics")):
+    sys.path.insert(0, _extensions_path)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -20,6 +26,7 @@ from agent_framework.agents.state import AgentContext
 from agent_framework.llm.config import LLMConfig
 from agent_framework.state import redis_manager as state_manager
 from agent_framework.services import agent_service
+from agent_framework.services.agent_spawner import set_routing_function
 from agent_framework.utils.logging_config import setup_logging
 
 # Configure logging
@@ -75,6 +82,13 @@ async def lifespan(app: FastAPI):
     from agent_framework.services import agent_spawner
 
     agent_spawner.set_agent_starter(start_agent_task)
+
+    try:
+        from rt_automation_tactics.core_api.routing import get_model_and_reasoning_effort_for_task
+        set_routing_function(get_model_and_reasoning_effort_for_task)
+        logger.info("Registered model routing function")
+    except ImportError:
+        logger.debug("No routing extension available (running in standalone mode)")
 
     yield
     logger.info("Agent Manager Service shutting down.")
@@ -476,7 +490,7 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
             )
 
         if agent_spawner.is_spawner_available():
-            result = agent_spawner.spawn_agent(
+            result = await agent_spawner.spawn_agent(
                 parent_state=parent_state,
                 name=kwargs.get("agent_name", "Sub-Agent"),
                 task=kwargs.get("task_description", ""),

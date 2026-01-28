@@ -142,5 +142,5 @@ class AgentContext(BaseModel):
             {"role": m["role"], "content": m["content"]}
             for m in self.messages
             if m.get("content") is not None
-            and m["role"] not in ["tool_call", "tool_result"]
+            and m["role"] not in ["tool_call", "tool_result", "reasoning"]
         ]

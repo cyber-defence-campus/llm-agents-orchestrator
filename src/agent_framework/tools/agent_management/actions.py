@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @register_tool(sandbox_execution=False)
-def spawn_sub_agent(
+async def spawn_sub_agent(
     agent_state: Any,
     task_description: str,
     agent_name: str,
@@ -47,8 +47,8 @@ def spawn_sub_agent(
         if not is_spawner_available():
             raise EnvironmentError("Agent Spawner Service is not reachable.")
 
-        # Delegate to service
-        result = spawn_agent(
+        # Delegate to service (now async)
+        result = await spawn_agent(
             parent_state=agent_state,
             name=agent_name,
             task=task_description,
@@ -157,11 +157,6 @@ def complete_assignment(
 ### Recommendations
 {rec_block if rec_block else "None"}
 """
-            # We wrap it in a system tag so the parent parser picks it up?
-            # Or we just send it as content.
-            # Original used <agent_completion_report>.
-            # We should probably stick to a structural tag for the parent to parse it mechanically if logic depends on it.
-            # Let's use <task_report> to differentiate.
 
             final_payload = f"<task_report>\n{report_text}\n</task_report>"
 

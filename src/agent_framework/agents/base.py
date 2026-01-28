@@ -231,13 +231,28 @@ class BaseAgent:
 
         llm_content = response.content
         tool_calls = response.tool_invocations
+        reasoning_content = response.reasoning_content
 
-        # Fallback: If content is empty but we have reasoning (e.g. DeepSeek), use it. // TODO: We should really standardize this.
-        if not llm_content and response.reasoning_content:
-            llm_content = f"Thinking Process:\n{response.reasoning_content}"
+        if llm_content and llm_content.strip() and llm_content.strip() != "\n":
+            # Normal case: we have actual content
+            new_msg = self.context.append_message("assistant", llm_content)
+            self._emit_message_event(new_msg)
+        elif reasoning_content:
+            display_content = f"Thinking Process:\n{reasoning_content}"
 
-        new_msg = self.context.append_message("assistant", llm_content)
-        self._emit_message_event(new_msg)
+            # Emit reasoning to UI for visibility (as assistant message for display)
+            new_msg = self.context.append_message("assistant", display_content)
+            self._emit_message_event(new_msg)
+
+            # Also store the raw reasoning with a special role that won't be
+            # included in get_history_for_llm()
+            self.context.append_message("reasoning", reasoning_content)
+
+            llm_content = display_content
+        else:
+            # Empty response - will be handled by empty response logic below
+            new_msg = self.context.append_message("assistant", llm_content or "")
+            self._emit_message_event(new_msg)
 
         # Dispatch Tools
         if tool_calls:

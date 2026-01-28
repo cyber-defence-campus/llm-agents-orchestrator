@@ -144,7 +144,7 @@ async def _try_local_orchestration(
                 )
 
             try:
-                result = spawn_agent(
+                result = await spawn_agent(
                     parent_state=agent_state,
                     name=kwargs.get("agent_name", "Sub-Agent"),
                     task=kwargs.get("task_description", ""),
