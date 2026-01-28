@@ -725,11 +725,46 @@ def _format_tool_result(
     return observation_xml, images
 
 
+def _get_dedup_key(tool_inv: dict[str, Any]) -> str:
+    """Generate a unique key for deduplication based on tool name and args."""
+    tool_name = tool_inv.get("toolName", "")
+    args = tool_inv.get("args", {}).copy()
+    # Remove IDs that are unique per call - they shouldn't affect dedup
+    args.pop("tool_call_id", None)
+    args.pop("tool_result_id", None)
+    return f"{tool_name}:{json.dumps(args, sort_keys=True)}"
+
+
+def _deduplicate_invocations(
+    tool_invocations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove duplicate tool invocations, keeping the first occurrence."""
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    duplicates = 0
+
+    for inv in tool_invocations:
+        key = _get_dedup_key(inv)
+        if key not in seen:
+            seen.add(key)
+            unique.append(inv)
+        else:
+            duplicates += 1
+            logger.debug(f"Duplicate tool invocation filtered: {inv.get('toolName')}")
+
+    if duplicates > 0:
+        logger.warning(f"Filtered out {duplicates} duplicate tool invocation(s)")
+
+    return unique
+
+
 async def process_tool_invocations(
     tool_invocations: list[dict[str, Any]],
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
 ) -> bool:
+    # Deduplicate invocations before processing
+    tool_invocations = _deduplicate_invocations(tool_invocations)
     logger.info(f"Processing {len(tool_invocations)} tool invocation(s) in parallel.")
     logger.debug(f"Raw tool_invocations: {tool_invocations}")
 

@@ -1,6 +1,6 @@
-
 import pytest
 from agent_framework.tools.registry import ToolRegistry, register_tool, get_tools_prompt
+
 
 # Helper to clear registry between tests
 @pytest.fixture(autouse=True)
@@ -8,6 +8,7 @@ def clean_registry():
     ToolRegistry.instance().clear()
     yield
     ToolRegistry.instance().clear()
+
 
 def test_tool_exclusion():
     @register_tool(sandbox_execution=False)
@@ -43,17 +44,18 @@ def test_tool_exclusion():
     assert 'name="tool_b"' in prompt_exclude_ac
     assert 'name="tool_c"' not in prompt_exclude_ac
 
+
 def test_generate_prompt_xml_exclusion():
     registry = ToolRegistry.instance()
-    
+
     def dummy_tool():
         pass
-    
+
     registry.register(dummy_tool, sandbox=False)
-    
+
     # Manually check the generate_prompt_xml method directly
     xml = registry.generate_prompt_xml(exclude=["dummy_tool"])
     assert 'name="dummy_tool"' not in xml
-    
+
     xml_with = registry.generate_prompt_xml()
     assert 'name="dummy_tool"' in xml_with

@@ -44,6 +44,8 @@ def load_external_tools():
                         importlib.import_module(pkg_name)
                         logger.info(f"Loaded external tool package: {pkg_name}")
                     except Exception as e:
-                        logger.error(f"Failed to load external tool package {pkg_name}: {e}")
+                        logger.error(
+                            f"Failed to load external tool package {pkg_name}: {e}"
+                        )
         except OSError as e:
             logger.error(f"Failed to list directory {base_path}: {e}")

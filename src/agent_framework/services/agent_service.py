@@ -166,6 +166,10 @@ def create_agent_config(
         reasoning_effort=reasoning_effort,
     )
 
+    display_model = platform_llm_name
+    if reasoning_effort:
+        display_model = f"{platform_llm_name} ({reasoning_effort})"
+
     # Create node data for Redis
     node_data = {
         "id": agent_id,
@@ -173,7 +177,7 @@ def create_agent_config(
         "status": "initializing",
         "task": task,
         "timestamp": datetime.now(UTC).isoformat(),
-        "model": platform_llm_name,
+        "model": display_model,
     }
 
     # Full agent config for starting the agent

@@ -249,24 +249,68 @@ def inspect_agent_tree(agent_state: Any) -> Dict[str, Any]:
     Retrieves the current agent hierarchy structure.
     """
     try:
-        all_nodes = db.get_all_agent_nodes()
+        # 1. Filter by job_id if available
+        job_id = None
+        if agent_state.sandbox_info:
+            job_id = agent_state.sandbox_info.get("job_id")
 
-        # Build a visual tree representation
-        # Differentiating from the original list style
+        if job_id:
+            nodes_map = db.get_agent_nodes_by_job_id(job_id)
+        else:
+            nodes_map = db.get_all_agent_nodes()
 
+        all_nodes = list(nodes_map.values())
+
+        # 2. Build tree structure
+        children_map = {}
+        roots = []
+        node_ids = set(n.get("id") for n in all_nodes)
+
+        for node in all_nodes:
+            parent_id = node.get("parent_id")
+            # A node is a root if it has no parent OR its parent is not in the current set
+            if not parent_id or parent_id not in node_ids:
+                roots.append(node)
+            else:
+                children_map.setdefault(parent_id, []).append(node)
+
+        # Helper to sort nodes
+        def sort_key(n):
+            return n.get("created_at", "")
+
+        roots.sort(key=sort_key)
+        for pid in children_map:
+            children_map[pid].sort(key=sort_key)
+
+        # 3. Render tree
         output_lines = ["Agent System Overview:", "======================"]
 
-        # Sort by creation time if available to show timeline or order
-        sorted_nodes = sorted(all_nodes.values(), key=lambda x: x.get("created_at", ""))
-
-        for node in sorted_nodes:
+        def render_node(node, depth=0):
             nid = node.get("id")
             name = node.get("name", "Unknown")
             status = node.get("status", "unknown").upper()
             role = node.get("agent_type", "General")
 
-            output_lines.append(f"• {name} [{nid}]")
-            output_lines.append(f"  Status: {status} | Type: {role}")
+            # Indentation
+            indent = "  " * depth
+            marker = "└─ " if depth > 0 else "• "
+
+            output_lines.append(f"{indent}{marker}{name} [{nid}]")
+            output_lines.append(f"{indent}   Status: {status} | Type: {role}")
+
+            # Recurse
+            if nid in children_map:
+                for child in children_map[nid]:
+                    render_node(child, depth + 1)
+
+        if not roots and all_nodes:
+            # Fallback if circle or weirdness: just dump all
+            output_lines.append("(Could not determine tree structure, listing all)")
+            for node in sorted(all_nodes, key=sort_key):
+                render_node(node, 0)
+        else:
+            for root in roots:
+                render_node(root, 0)
 
         return {"hierarchy_view": "\n".join(output_lines), "node_count": len(all_nodes)}
     except Exception as e:

@@ -130,6 +130,12 @@ class BaseAgent:
 
     def _announce_presence(self):
         """Registers the agent node in the distributed graph."""
+        model_display = self.llm_config.model_name
+        if self.llm_config.reasoning_effort:
+            model_display = (
+                f"{self.llm_config.model_name} ({self.llm_config.reasoning_effort})"
+            )
+
         details = {
             "id": self.context.agent_id,
             "name": self.context.agent_name,
@@ -138,7 +144,7 @@ class BaseAgent:
             "parent_id": self.context.parent_id,
             "created_at": self.context.start_time,
             "agent_type": self.__class__.__name__,
-            "model": self.llm_config.model_name,
+            "model": model_display,
         }
         db.add_agent_node(details)
         db.add_agent_state(self.context.agent_id, self.context)

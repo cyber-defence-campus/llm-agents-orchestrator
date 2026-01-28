@@ -160,3 +160,35 @@ class TestToolProcessing:
                 "error": "Something went wrong",
                 "type": "ExecutionError",
             }
+
+
+class TestToolDeduplication:
+    """Tests for tool invocation deduplication logic."""
+
+    def test_deduplicate_keeps_order(self):
+        """Test that first occurrence is kept."""
+        from agent_framework.tools.executor import _deduplicate_invocations
+
+        invocations = [
+            {"toolName": "tool_a", "args": {"id": "first"}},
+            {"toolName": "tool_b", "args": {}},
+            {"toolName": "tool_a", "args": {"id": "first"}},  # Duplicate
+        ]
+
+        result = _deduplicate_invocations(invocations)
+
+        assert len(result) == 2
+        assert result[0]["args"]["id"] == "first"  # First occurrence kept
+
+    def test_deduplicate_different_tools_same_args(self):
+        """Test that same args with different tool names are not deduplicated."""
+        from agent_framework.tools.executor import _deduplicate_invocations
+
+        invocations = [
+            {"toolName": "tool_a", "args": {"x": 1}},
+            {"toolName": "tool_b", "args": {"x": 1}},
+        ]
+
+        result = _deduplicate_invocations(invocations)
+
+        assert len(result) == 2

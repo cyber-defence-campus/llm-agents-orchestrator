@@ -22,7 +22,9 @@ def mock_sandbox_client():
 
 
 @pytest.mark.asyncio
-async def test_run_shell_command_sandbox_integration(mock_agent_state, mock_sandbox_client):
+async def test_run_shell_command_sandbox_integration(
+    mock_agent_state, mock_sandbox_client
+):
     """
     Verifies that 'run_shell_command' is correctly routed to the sandbox client
     with the correct 'session_id' parameter.

@@ -133,7 +133,7 @@ class ShellExecutor:
         # If session is busy, we check if the user is just trying to wait
         # "Waiting" is defined as sending an empty command or a comment
         is_wait_command = not cmd.strip() or cmd.strip().startswith("#")
-        
+
         if self.busy:
             if is_wait_command and not is_input:
                 # User wants to wait for the running command to finish
@@ -205,18 +205,15 @@ class ShellExecutor:
     async def _wait_for_marker(self, timeout: float) -> dict:
         """Wait for the active command marker to appear."""
         start_ts = time.time()
-        
+
         # Inherit markers from instance state
         start_marker = getattr(self, "current_start_marker", "")
         end_marker = getattr(self, "current_end_marker", "")
-        
+
         if not start_marker or not end_marker:
             # No active command to wait for?
             self.busy = False
-            return {
-                "error": "No active command context to wait for",
-                "status": "error"
-            }
+            return {"error": "No active command context to wait for", "status": "error"}
 
         while (time.time() - start_ts) < timeout:
             await asyncio.sleep(0.15)
