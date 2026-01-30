@@ -81,6 +81,7 @@ async def spawn_agent(
         inherited_api_key = None
         inherited_reasoning_effort = None
         provider = None
+        routing_mode = False
 
         if hasattr(parent_state, "sandbox_info") and parent_state.sandbox_info:
             job_id = parent_state.sandbox_info.get("job_id")
@@ -88,13 +89,14 @@ async def spawn_agent(
             inherited_api_key = parent_state.sandbox_info.get("api_key")
             inherited_reasoning_effort = parent_state.sandbox_info.get("reasoning_effort")
             provider = parent_state.sandbox_info.get("provider")
+            routing_mode = parent_state.sandbox_info.get("routing_mode", False)
 
         # Determine effective model
         effective_model = model or inherited_model
         effective_reasoning_effort = inherited_reasoning_effort
 
-        # Apply routing if available and no explicit model override
-        if not model and provider and _routing_func:
+        # Apply routing if available, no explicit model override, and routing_mode is enabled
+        if not model and provider and _routing_func and routing_mode:
             try:
                 effective_model, effective_reasoning_effort = await _routing_func(
                     provider, task, inherited_api_key
@@ -125,6 +127,8 @@ async def spawn_agent(
             sandbox_info["reasoning_effort"] = effective_reasoning_effort
         if provider:
             sandbox_info["provider"] = provider
+        # Preserve routing_mode setting for nested spawns
+        sandbox_info["routing_mode"] = routing_mode
 
         # Create agent config
         config_result, agent_state = agent_service.create_agent_config(
