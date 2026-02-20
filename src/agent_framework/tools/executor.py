@@ -49,6 +49,19 @@ async def execute_tool(
         f"Sandbox mode: {sandbox_mode_enabled}, Sandboxed: {is_sandboxed}, Orchestration: {is_orchestration_tool}"
     )
 
+    # Audit Logging for shell commands
+    if tool_name == "run_shell_command":
+        try:
+            from agent_framework.utils.audit import log_command
+            command = kwargs.get("command")
+            if command and command.strip() and not command.strip().startswith("#"):
+                job_id = None
+                if agent_state and hasattr(agent_state, "sandbox_info") and agent_state.sandbox_info:
+                    job_id = agent_state.sandbox_info.get("job_id")
+                log_command(command, agent_id=agent_id_log, job_id=job_id)
+        except Exception as e:
+            logger.error(f"Failed to audit shell command in executor: {e}")
+
     # If running inside sandbox CONTAINER (tool_server), execute locally
     if is_sandbox_runtime:
         return await _execute_tool_locally(tool_name, agent_state, **kwargs)

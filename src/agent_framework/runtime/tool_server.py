@@ -107,10 +107,11 @@ def _worker_process(agent_id: str, inbox: mp.Queue, outbox: mp.Queue):
     logging.getLogger().handlers = []
 
     # Import locally to avoid side effects in parent
-    from agent_framework.tools.registry import get_tool_by_name
+    from agent_framework.tools.registry import get_tool_by_name, needs_agent_state
     from agent_framework.tools.argument_parser import (
         convert_arguments,
     )
+    from types import SimpleNamespace
     import agent_framework.tools  # Trigger registration
 
     logger.info(f"Worker process started for {agent_id}")
@@ -131,6 +132,14 @@ def _worker_process(agent_id: str, inbox: mp.Queue, outbox: mp.Queue):
 
                 # Convert and Validate
                 kwargs = convert_arguments(tool_fn, raw_kwargs)
+
+                # Inject mock agent state if needed
+                if needs_agent_state(tool_name):
+                    agent_state = SimpleNamespace(
+                        agent_id=agent_id,
+                        sandbox_info={"job_id": os.getenv("PLATFORM_SESSION_ID")}
+                    )
+                    kwargs["agent_state"] = agent_state
 
                 # Execute
                 if asyncio.iscoroutinefunction(tool_fn):
