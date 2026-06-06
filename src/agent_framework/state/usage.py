@@ -77,6 +77,21 @@ def increment_usage_stats(
             inc(f"{date_usage_key}:models:{model_name}")
         inc(f"{date_usage_key}:jobs:{job_id}")
 
+        pipe.rpush(
+            f"{usage_base_key}:calls",
+            json.dumps(
+                {
+                    "inserted_at": datetime.now(UTC).isoformat(),
+                    "agent_id": agent_id,
+                    "model": model_name,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                    "cost_usd": cost,
+                }
+            ),
+        )
+
         pipe.execute()
 
         # Publish update event
@@ -93,6 +108,24 @@ def increment_usage_stats(
         logger.error(f"Failed to increment usage: {e}")
 
 
+def get_usage_calls(client: redis.Redis, job_id: str) -> List[Dict[str, Any]]:
+    """The per-LLM-call usage timeline for a job (one record per call), in call
+    order. Returns [] if none recorded."""
+    if not job_id or not client:
+        return []
+    try:
+        raw = client.lrange(f"platform:usage:job:{job_id}:calls", 0, -1)
+    except Exception:
+        return []
+    out = []
+    for r in raw:
+        try:
+            out.append(json.loads(r))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
     if not job_id or not client:
         return {}
@@ -106,7 +139,9 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
     try:
         models = client.smembers(f"platform:usage:job:{job_id}:used_models")
         for m in models:
-            models_stats[m] = _fetch_hash(client, f"platform:usage:job:{job_id}:models:{m}")
+            models_stats[m] = _fetch_hash(
+                client, f"platform:usage:job:{job_id}:models:{m}"
+            )
     except Exception:
         pass
 
@@ -126,6 +161,7 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
                 node_raw = client.hget("agent_graph:nodes", aid)
                 if node_raw:
                     import json
+
                     node_data = json.loads(node_raw)
                     agent_graph_data[aid] = {
                         "name": node_data.get("name", aid),

@@ -387,6 +387,7 @@ from .usage import (
     get_usage_stats as _get_stats,
     get_global_usage_stats as _get_global_stats,
     get_usage_history as _get_history,
+    get_usage_calls as _get_calls,
 )
 
 
@@ -397,6 +398,10 @@ def increment_usage_stats(*args, **kwargs):
 
 def get_usage_stats(job_id: str):
     return _get_stats(_manager.redis_client, job_id) if _manager.redis_client else {}
+
+
+def get_usage_calls(job_id: str):
+    return _get_calls(_manager.redis_client, job_id) if _manager.redis_client else []
 
 
 def get_global_usage_stats():

@@ -13,6 +13,32 @@ from jinja2 import (
 from litellm import ModelResponse, completion_cost
 from litellm.utils import supports_prompt_caching
 
+_DEEPSEEK_V4_PRICES = {
+    "input_cost_per_token": 0.14e-6,
+    "output_cost_per_token": 0.28e-6,
+    "cache_read_input_token_cost": 0.028e-6,
+    "litellm_provider": "deepseek",
+    "mode": "chat",
+}
+_DEEPSEEK_V4_PRO_PRICES = {
+    "input_cost_per_token": 1.74e-6,
+    "output_cost_per_token": 3.48e-6,
+    "cache_read_input_token_cost": 0.145e-6,
+    "litellm_provider": "deepseek",
+    "mode": "chat",
+}
+try:
+    litellm.register_model(
+        {
+            "deepseek-v4-flash": _DEEPSEEK_V4_PRICES,
+            "deepseek/deepseek-v4-flash": _DEEPSEEK_V4_PRICES,
+            "deepseek-v4-pro": _DEEPSEEK_V4_PRO_PRICES,
+            "deepseek/deepseek-v4-pro": _DEEPSEEK_V4_PRO_PRICES,
+        }
+    )
+except Exception:  # pragma: no cover - pricing is best-effort
+    pass
+
 from agent_framework.agents.state import AgentContext
 from agent_framework.llm.config import LLMConfig
 from agent_framework.llm.request_queue import get_shared_queue
@@ -20,7 +46,6 @@ from agent_framework.llm.utils import parse_tool_invocations
 from agent_framework.prompts import load_prompt_modules, get_all_module_names
 from agent_framework.tools import get_tools_prompt
 from agent_framework.state import redis_manager as state_manager
-
 
 logger = logging.getLogger("agent_framework.llm")
 
@@ -284,9 +309,9 @@ class LLM:
                 if not is_string_content or not original_content.startswith(
                     self.system_prompt
                 ):
-                    first_message[
-                        "content"
-                    ] = f"{self.system_prompt}\n\n---\n\n{original_content}"
+                    first_message["content"] = (
+                        f"{self.system_prompt}\n\n---\n\n{original_content}"
+                    )
                 messages = [first_message] + history_copy[1:]
             else:
                 messages = [
@@ -446,7 +471,15 @@ class LLM:
 
     def _update_usage_stats(self, response: ModelResponse) -> None:
         try:
-            cost = completion_cost(response) or 0.0
+            try:
+                cost = completion_cost(response) or 0.0
+            except Exception as ce:
+                # A model litellm has no price for (e.g. DeepSeek V4) must NOT
+                # discard the token counts below — record tokens with cost 0.
+                logger.debug(
+                    f"completion_cost unavailable ({ce}); recording tokens with cost=0"
+                )
+                cost = 0.0
             usage = response.usage
             if usage:
                 input_tokens = getattr(usage, "prompt_tokens", 0)
