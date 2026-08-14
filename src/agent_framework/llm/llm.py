@@ -27,15 +27,49 @@ _DEEPSEEK_V4_PRO_PRICES = {
     "litellm_provider": "deepseek",
     "mode": "chat",
 }
+def _reported_cost(response) -> float | None:
+    """Cost the provider itself reported, if any.
+
+    Preferred over litellm's own table because it is always right and never
+    goes stale. OpenRouter returns usage.cost per call; a dated or
+    provider-prefixed model id that litellm has no entry for would otherwise
+    be silently accounted at zero, which is how every run so far has shown
+    $0.0000 despite spending real tokens.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    for attr in ("cost", "total_cost"):
+        value = getattr(usage, attr, None)
+        if value is None and isinstance(usage, dict):
+            value = usage.get(attr)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
+
+
+def _price_variants(base: str, prices: dict) -> dict:
+    """Register a model under the shapes a model id actually arrives in.
+
+    Dated releases (…-0731) and provider prefixes (openrouter/…) are both
+    common and neither matches a bare name, so registering only the bare one
+    prices nothing in practice.
+    """
+    names = {base, f"deepseek/{base}"}
+    for name in tuple(names):
+        names.add(f"openrouter/{name}")
+    return {name: prices for name in names}
+
+
 try:
-    litellm.register_model(
-        {
-            "deepseek-v4-flash": _DEEPSEEK_V4_PRICES,
-            "deepseek/deepseek-v4-flash": _DEEPSEEK_V4_PRICES,
-            "deepseek-v4-pro": _DEEPSEEK_V4_PRO_PRICES,
-            "deepseek/deepseek-v4-pro": _DEEPSEEK_V4_PRO_PRICES,
-        }
-    )
+    registry: dict = {}
+    for _base, _prices in (
+        ("deepseek-v4-flash", _DEEPSEEK_V4_PRICES),
+        ("deepseek-v4-flash-0731", _DEEPSEEK_V4_PRICES),
+        ("deepseek-v4-pro", _DEEPSEEK_V4_PRO_PRICES),
+    ):
+        registry.update(_price_variants(_base, _prices))
+    litellm.register_model(registry)
 except Exception:  # pragma: no cover - pricing is best-effort
     pass
 
@@ -68,6 +102,27 @@ from agent_framework.llm.types import (
 
 MODELS_WITHOUT_STOP_WORDS = ["o1", "o1-preview", "o1-mini", "o3-mini"]
 REASONING_EFFORT_SUPPORTED_MODELS = ["o1", "o1-preview", "o1-mini", "o3-mini"]
+
+
+
+def openrouter_routing() -> dict[str, Any] | None:
+    """OpenRouter provider pin, from OPENROUTER_PROVIDER_ORDER.
+
+    Left unpinned, OpenRouter picks a provider per request and they do not
+    behave alike: for the same model one upstream returned reasoning tokens
+    and another returned none, which turned a reasoning cap into a coin
+    flip. Pinning also keeps prompt caching effective, since a cache lives
+    with one provider.
+    """
+    order = os.getenv("OPENROUTER_PROVIDER_ORDER", "").strip()
+    if not order:
+        return None
+    providers = [p.strip() for p in order.split(",") if p.strip()]
+    if not providers:
+        return None
+    allow_fallbacks = os.getenv(
+        "OPENROUTER_ALLOW_FALLBACKS", "false").lower() in ("1", "true", "yes")
+    return {"order": providers, "allow_fallbacks": allow_fallbacks}
 
 
 class LLM:
@@ -471,15 +526,17 @@ class LLM:
 
     def _update_usage_stats(self, response: ModelResponse) -> None:
         try:
-            try:
-                cost = completion_cost(response) or 0.0
-            except Exception as ce:
-                # A model litellm has no price for (e.g. DeepSeek V4) must NOT
-                # discard the token counts below — record tokens with cost 0.
-                logger.debug(
-                    f"completion_cost unavailable ({ce}); recording tokens with cost=0"
-                )
-                cost = 0.0
+            cost = _reported_cost(response)
+            if cost is None:
+                try:
+                    cost = completion_cost(response) or 0.0
+                except Exception as ce:
+                    # A model litellm has no price for must NOT discard the
+                    # token counts below — record tokens with cost 0.
+                    logger.debug(
+                        f"completion_cost unavailable ({ce}); recording tokens with cost=0"
+                    )
+                    cost = 0.0
             usage = response.usage
             if usage:
                 input_tokens = getattr(usage, "prompt_tokens", 0)
@@ -575,10 +632,25 @@ class LLM:
         if self._should_include_stop_param():
             completion_args["stop"] = ["</function>"]
 
-        if self.config.reasoning_effort:
-            completion_args["reasoning_effort"] = self.config.reasoning_effort
-        elif self._should_include_reasoning_effort():
-            completion_args["reasoning_effort"] = "high"
+        effort = self.config.reasoning_effort
+        if not effort and self._should_include_reasoning_effort():
+            effort = "high"
+        if effort:
+            if provider == "openrouter":
+                # litellm rejects the normalised reasoning_effort on the
+                # OpenRouter route (UnsupportedParamsError). OpenRouter takes
+                # its own `reasoning` object instead, which has to travel in
+                # extra_body. Without this, capping reasoning is impossible
+                # here, and an uncapped reasoning model can spend the whole
+                # max_tokens budget thinking and return empty content.
+                completion_args.setdefault("extra_body", {})["reasoning"] = {
+                    "effort": effort
+                }
+            else:
+                completion_args["reasoning_effort"] = effort
+
+        if provider == "openrouter" and (routing := openrouter_routing()):
+            completion_args.setdefault("extra_body", {})["provider"] = routing
 
         logger.debug(
             f"Completion Args for LiteLLM (Agent: {self.agent_name}): {completion_args}"
@@ -594,3 +666,93 @@ class LLM:
         )
 
         return response
+
+
+async def complete(
+    prompt: str,
+    system: str | None = None,
+    config: LLMConfig | None = None,
+    max_tokens: int = 4096,
+    reasoning_max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """One completion, with no agent loop around it.
+
+    The LLM class exists to drive a conversational agent: it renders a system
+    prompt full of tool definitions, an XML call protocol and wait-mode
+    rules. That is the wrong vehicle for asking a model to emit one
+    structured document. A caller that wants JSON back ends up fighting the
+    agent contract, and a reasoning model can spend its whole budget
+    deciding whether to answer or to emit a tool call, returning empty
+    content after several minutes.
+
+    This shares the provider, key and reasoning resolution with
+    _make_request so there is one place that knows how to reach a model, and
+    returns the raw fields a caller needs to tell an empty answer from a
+    truncated one.
+    """
+    config = config or LLMConfig()
+    model_name = config.model_name or ""
+
+    messages: list[dict[str, Any]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    args: dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "timeout": config.request_timeout,
+    }
+
+    provider = model_name.split("/")[0] if "/" in model_name else None
+    if provider:
+        args["custom_llm_provider"] = provider
+
+    if config.api_key:
+        args["api_key"] = config.api_key
+    elif provider and (key := os.getenv(f"{provider.upper()}_API_KEY")):
+        args["api_key"] = key.strip("'")
+
+    if config.api_base:
+        args["api_base"] = config.api_base
+    elif api_base_env := (os.getenv("LLM_API_BASE") or os.getenv("OLLAMA_API_BASE")):
+        args["api_base"] = api_base_env
+
+    if config.temperature is not None:
+        args["temperature"] = config.temperature
+
+    # A token budget beats an effort level. "low" is advisory and a
+    # reasoning model can still spend the entire max_tokens thinking and
+    # return empty content with finish_reason=length, which is a silent
+    # failure that costs the full budget. Capping reasoning by tokens
+    # guarantees headroom for an answer.
+    if provider == "openrouter" and reasoning_max_tokens:
+        args.setdefault("extra_body", {})["reasoning"] = {
+            "max_tokens": reasoning_max_tokens
+        }
+    elif config.reasoning_effort:
+        if provider == "openrouter":
+            args.setdefault("extra_body", {})["reasoning"] = {
+                "effort": config.reasoning_effort
+            }
+        else:
+            args["reasoning_effort"] = config.reasoning_effort
+
+    if provider == "openrouter" and (routing := openrouter_routing()):
+        args.setdefault("extra_body", {})["provider"] = routing
+
+    response = await litellm.acompletion(**args)
+    choice = response.choices[0]
+    message = getattr(choice, "message", None)
+    usage = getattr(response, "usage", None)
+
+    return {
+        "content": (getattr(message, "content", None) or ""),
+        "reasoning": (getattr(message, "reasoning_content", None)
+                      or getattr(message, "reasoning", None) or ""),
+        "finish_reason": getattr(choice, "finish_reason", None),
+        "model": model_name,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+    }

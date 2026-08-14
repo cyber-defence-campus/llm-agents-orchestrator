@@ -40,6 +40,15 @@ class LLMConfig(BaseModel):
     @classmethod
     def check_env_vars(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if not data.get("reasoning_effort"):
+                # Deployment-level cap. An uncapped reasoning model can spend
+                # the whole max_tokens budget thinking and return empty
+                # content, which presents as a slow call rather than as a
+                # malformed request.
+                env_val = os.getenv("LLM_REASONING_EFFORT")
+                if env_val:
+                    data["reasoning_effort"] = env_val.strip().strip("'")
+
             if "batching_enabled" not in data:
                 env_val = os.getenv("LLM_BATCHING_ENABLED")
                 if env_val is not None:

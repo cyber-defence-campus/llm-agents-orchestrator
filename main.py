@@ -437,6 +437,58 @@ async def health_check():
 
 
 # =============================================================================
+# Single-shot completion
+# =============================================================================
+
+
+class CompletionRequest(BaseModel):
+    """One completion, with no agent wrapped around it."""
+
+    prompt: str
+    system: str | None = None
+    model: str | None = None
+    max_tokens: int = 4096
+    reasoning_effort: str | None = None
+    reasoning_max_tokens: int | None = None
+    temperature: float | None = None
+
+
+@app.post("/completions")
+async def create_completion(request: CompletionRequest):
+    """Ask the configured model one question and return its answer.
+
+    The agent endpoints render a system prompt of tool definitions, an XML
+    call protocol and wait-mode rules, which is right for an autonomous
+    agent and wrong for a caller that wants a single structured document
+    back. Asking for JSON through an agent makes the model choose between
+    the two contracts, and a reasoning model can spend its whole budget on
+    that choice and return empty content.
+
+    finish_reason and the token counts come back with the content so a
+    caller can distinguish "the model declined" from "the budget ran out
+    during reasoning", which are the same empty string otherwise.
+    """
+    from agent_framework.llm.llm import complete
+
+    config = LLMConfig(
+        model_name=request.model,
+        reasoning_effort=request.reasoning_effort,
+        temperature=request.temperature,
+    )
+    try:
+        return await complete(
+            prompt=request.prompt,
+            system=request.system,
+            config=config,
+            max_tokens=request.max_tokens,
+            reasoning_max_tokens=request.reasoning_max_tokens,
+        )
+    except Exception as e:
+        logger.exception("Completion failed")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# =============================================================================
 # Tool Execution
 # =============================================================================
 
