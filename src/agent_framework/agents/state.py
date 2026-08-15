@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
@@ -10,29 +9,22 @@ def _new_agent_id() -> str:
 
 
 class AgentContext(BaseModel):
-    """
-    Represents the operational state and memory of an agent.
-    """
-
     model_config = ConfigDict(populate_by_name=True)
 
     agent_id: str = Field(default_factory=_new_agent_id)
     agent_name: str = "Assistant"
     parent_id: Optional[str] = None
 
-    # Workflow Status
     status: str = "initializing"
     task: str = ""
     short_task: Optional[str] = None
     original_task: Optional[str] = None
 
-    # Execution Metrics
     iteration: int = 0
     max_iterations: int = 1000
     start_time: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     last_updated: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    # Flags
     completed: bool = False
     stop_requested: bool = False
     waiting_for_input: bool = False
@@ -40,19 +32,16 @@ class AgentContext(BaseModel):
     wait_timeout: Optional[int] = None
     llm_failed: bool = False
 
-    # Memory
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     context_data: Dict[str, Any] = Field(default_factory=dict, alias="context")
     tool_history: List[Dict[str, Any]] = Field(default_factory=list)
     observations: List[Dict[str, Any]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 
-    # Sandbox
     sandbox_id: Optional[str] = None
     sandbox_token: Optional[str] = None
     sandbox_info: Optional[Dict[str, Any]] = None
 
-    # Results
     final_result: Optional[Dict[str, Any]] = None
     consecutive_empty_responses: int = 0
 
@@ -137,7 +126,6 @@ class AgentContext(BaseModel):
         self.touch()
 
     def get_history_for_llm(self) -> List[Dict[str, Any]]:
-        """Returns messages formatted for LLM consumption."""
         return [
             {"role": m["role"], "content": m["content"]}
             for m in self.messages

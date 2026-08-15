@@ -17,16 +17,13 @@ from .registry import (
     needs_agent_state,
 )
 
-# Re-export registry for compatibility if needed
 from .registry import ToolRegistry
 
 SANDBOX_MODE = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
 
-# Tool Modules Import
 from .agent_management import *  # noqa: F403
 from .terminal import *  # noqa: F403
 
-# Load external tools from AGENT_TOOL_PATHS
 from .loader import load_external_tools
 
 load_external_tools()

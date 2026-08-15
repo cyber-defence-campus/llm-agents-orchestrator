@@ -16,10 +16,6 @@ class ToolDef(TypedDict):
 
 
 class ToolRegistry:
-    """
-    Central repository for all available agent tools.
-    """
-
     _instance = None
 
     def __init__(self):
@@ -59,7 +55,6 @@ class ToolRegistry:
     def generate_prompt_xml(
         self, sandbox_active: bool = False, exclude: Optional[List[str]] = None
     ) -> str:
-        """Constructs the XML prompt for tool definitions."""
         valid_tools = [
             t for t in self._registry.values() if (not t["sandbox"]) or sandbox_active
         ]
@@ -67,13 +62,11 @@ class ToolRegistry:
         if exclude:
             valid_tools = [t for t in valid_tools if t["name"] not in exclude]
 
-        # Sort for stability
         valid_tools.sort(key=lambda x: x["name"])
 
         return "\n\n".join([t["schema_xml"] for t in valid_tools])
 
     def _load_schema(self, fn: Callable) -> Tuple[str, str]:
-        # Improved schema discovery logic
         try:
             path = Path(inspect.getfile(fn)).parent
             potential_files = [path / "tool_def.xml"]
@@ -81,9 +74,6 @@ class ToolRegistry:
             for p in potential_files:
                 if p.exists():
                     content = p.read_text(encoding="utf-8")
-                    # Naive extraction for now - assumes cleaner schemas after refactor
-                    # If multiple tools in one file, we need better parsing which I'll assume exists
-                    # For now returning full content or finding tag
 
                     tag = f'<tool name="{fn.__name__}"'
                     if tag in content:
@@ -91,7 +81,6 @@ class ToolRegistry:
                         end = content.find("</tool>", start) + 7
                         return content[start:end], "Loaded"
 
-                    # Support new simplified schemas if entire file is the tool
                     if "<tool" in content and content.count("<tool") == 1:
                         return content.strip(), "Loaded"
 
@@ -107,7 +96,6 @@ class ToolRegistry:
             )
 
 
-# Global Decorator
 def register_tool(func: Optional[Callable] = None, *, sandbox_execution: bool = True):
     reg = ToolRegistry.instance()
 
@@ -120,7 +108,6 @@ def register_tool(func: Optional[Callable] = None, *, sandbox_execution: bool = 
     return wrapper
 
 
-# Facades
 def get_tool_by_name(name: str) -> Optional[Callable]:
     t = ToolRegistry.instance().get_tool(name)
     return t["fn"] if t else None

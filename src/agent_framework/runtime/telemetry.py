@@ -1,5 +1,4 @@
 import logging
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -72,7 +71,6 @@ class TelemetryService:
         except Exception as e:
             logger.error(f"Failed to save telemetry: {e}")
 
-    # Backward compatibility helpers / Projections
     def get_tool_executions(self, agent_id: str) -> List[Dict[str, Any]]:
         executions = []
         for e in self._events:

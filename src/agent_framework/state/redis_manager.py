@@ -3,12 +3,11 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import redis
-from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
-# Type Checking Imports
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,11 +17,6 @@ logger = logging.getLogger("agent.state_manager")
 
 
 class RedisStateManager:
-    """
-    Manages application state, graph structure, and event publishing via Redis.
-    """
-
-    # Keys
     KEY_AGENTS_HASH = "agent_graph:nodes"
     KEY_AGENTS_ZSET = "agent_graph:nodes_by_time"
     KEY_EDGES_LIST = "agent_graph:edges"
@@ -31,13 +25,6 @@ class RedisStateManager:
     PREFIX_MSG = "platform:messages:"
     PREFIX_JOB_UPDATES = "platform:job-updates:"
     PREFIX_JOB_AGENTS = "platform:job_agents:"
-
-    SCRIPT_UPDATE_MAX = """
-    local current = tonumber(redis.call('HGET', KEYS[1], ARGV[1])) or 0
-    if tonumber(ARGV[2]) > current then
-        redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-    end
-    """
 
     def __init__(self, host: str, port: int, db: int = 0):
         self.host = host
@@ -68,13 +55,10 @@ class RedisStateManager:
 
     @property
     def redis_client(self) -> redis.Redis:
-        # Compatibility alias
         return self.client
 
     def _is_connected(self) -> bool:
         return self._client is not None
-
-    # --- Events ---
 
     def publish_event(
         self, job_id: Optional[str], event_type: str, data: Dict[str, Any]
@@ -84,7 +68,6 @@ class RedisStateManager:
 
         target_job_id = job_id
         if not target_job_id:
-            # Attempt derivation
             agent_id = (
                 data.get("agent_id")
                 or data.get("node", {}).get("id")
@@ -111,8 +94,6 @@ class RedisStateManager:
         except Exception as e:
             logger.error(f"Failed to publish event {event_type}: {e}")
 
-    # --- Graph Nodes ---
-
     def add_agent_node(self, node: Dict[str, Any]):
         if not self._is_connected():
             return
@@ -138,16 +119,13 @@ class RedisStateManager:
             return None
 
     def get_agent_nodes_by_job_id(self, job_id: str) -> Dict[str, Any]:
-        """Returns all agent nodes associated with a specific job_id."""
         if not self._is_connected():
             return {}
         try:
-            # Get agent IDs for this job
             agent_ids = self.client.smembers(f"{self.PREFIX_JOB_AGENTS}{job_id}")
             if not agent_ids:
                 return {}
 
-            # Fetch node data for these agents
             nodes = {}
             raw_nodes = self.client.hmget(self.KEY_AGENTS_HASH, list(agent_ids))
             for i, raw in enumerate(raw_nodes):
@@ -160,7 +138,6 @@ class RedisStateManager:
             return {}
 
     def get_all_agent_nodes(self) -> Dict[str, Any]:
-        """Returns all agent nodes in the graph."""
         if not self._is_connected():
             return {}
         try:
@@ -192,7 +169,6 @@ class RedisStateManager:
             return [], 0
 
     def get_agent_status(self, agent_id: str) -> Optional[str]:
-        """Returns the status of an agent."""
         node = self.get_agent_node(agent_id)
         return node.get("status") if node else None
 
@@ -211,9 +187,8 @@ class RedisStateManager:
             return
 
         node.update(updates)
-        self.add_agent_node(node)  # Re-save
+        self.add_agent_node(node)
 
-        # Publish update
         state = self.get_agent_state(agent_id)
         job_id = (
             state.sandbox_info.get("job_id") if state and state.sandbox_info else None
@@ -232,8 +207,6 @@ class RedisStateManager:
         node.update(fields)
         self.add_agent_node(node)
 
-    # --- Graph Edges ---
-
     def add_edge(self, from_id: str, to_id: str, edge_type: str, **kwargs):
         if not self._is_connected():
             return
@@ -241,7 +214,6 @@ class RedisStateManager:
         try:
             self.client.lpush(self.KEY_EDGES_LIST, json.dumps(edge))
 
-            # Helper to find job_id
             job_id = None
             for aid in (from_id, to_id):
                 s = self.get_agent_state(aid)
@@ -257,7 +229,6 @@ class RedisStateManager:
             logger.error(f"Error adding edge: {e}")
 
     def get_all_edges(self) -> List[Dict[str, Any]]:
-        """Returns all edges in the graph."""
         if not self._is_connected():
             return []
         try:
@@ -270,8 +241,6 @@ class RedisStateManager:
     def set_root_agent_id(self, agent_id: str):
         if self._is_connected():
             self.client.set(self.KEY_ROOT_ID, agent_id, nx=True)
-
-    # --- Agent State ---
 
     def add_agent_state(self, agent_id: str, state: "AgentContext"):
         if not self._is_connected():
@@ -306,8 +275,6 @@ class RedisStateManager:
         except Exception as e:
             logger.error(f"Error loading state {agent_id}: {e}")
             return None
-
-    # --- Messaging ---
 
     def delete_agent(self, agent_id: str):
         if not self._is_connected():
@@ -345,24 +312,14 @@ class RedisStateManager:
             logger.error(f"Error popping messages for {agent_id}: {e}")
             return []
 
-    # --- Usage Stats ---
-    # Kept minimal for brevity, logic matched
-    def increment_usage_stats(self, job_id: str, agent_id: Optional[str], **stats):
-        # ... Implementation details passed to helper or consolidated ...
-        # For this refactor I will rely on the caller or implement simplified version if critical
-        pass
 
-
-# Global Singleton Initialization
 _host = os.getenv("REDIS_HOST", "localhost")
 _port = int(os.getenv("REDIS_PORT", "6379"))
 
 _manager = RedisStateManager(_host, _port)
 
 # Export functional facade for backward compatibility
-redis_client = (
-    _manager._client if _manager._is_connected() else None
-)  # Direct access if needed
+redis_client = _manager._client if _manager._is_connected() else None
 publish_event = _manager.publish_event
 add_agent_node = _manager.add_agent_node
 get_agent_node = _manager.get_agent_node
@@ -381,7 +338,6 @@ get_paginated_agent_nodes = _manager.get_paginated_agent_nodes
 add_message_to_queue = _manager.add_message_to_queue
 pop_all_messages_for_agent = _manager.pop_all_messages_for_agent
 
-# Usage Stats
 from .usage import (
     increment_usage_stats as _inc_stats,
     get_usage_stats as _get_stats,

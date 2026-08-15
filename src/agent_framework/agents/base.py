@@ -1,9 +1,8 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Dict, List, Type
+from typing import Any, Optional, Dict, List
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -18,10 +17,8 @@ logger = logging.getLogger("agent_framework.core_agent")
 
 
 def _resolve_template_paths(agent_type_name: str) -> List[Path]:
-    """Helper to determine search paths for Jinja templates."""
     paths = []
 
-    # 1. External Overrides (ENV)
     if env_paths := os.getenv("AGENT_PROMPT_PATHS"):
         for p_str in env_paths.split(os.pathsep):
             if not p_str.strip():
@@ -31,7 +28,6 @@ def _resolve_template_paths(agent_type_name: str) -> List[Path]:
             if (p / agent_type_name).is_dir():
                 paths.append(p / agent_type_name)
 
-    # 2. Built-in Defaults
     root = Path(__file__).parent.parent
     builtin_agent_dir = root / "prompts" / agent_type_name
 
@@ -42,21 +38,15 @@ def _resolve_template_paths(agent_type_name: str) -> List[Path]:
 
 
 class BaseAgent:
-    """
-    The primary execution unit for the agent system.
-    """
-
     MAX_ITERATION_LIMIT = 200
     agent_name: str = "GenericAgent"
     jinja_env: Environment
 
-    # Default configuration
     _default_llm_conf = LLMConfig()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
-        # Avoid running setup for the abstract base class itself
         if cls.__name__ == "BaseAgent":
             return
 
@@ -64,7 +54,6 @@ class BaseAgent:
 
     @classmethod
     def _configure_template_engine(cls):
-        """Sets up the Jinja2 environment for the agent subclass."""
         cls.agent_name = cls.__name__
         search_paths = _resolve_template_paths(cls.agent_name)
 
@@ -80,10 +69,8 @@ class BaseAgent:
         self._setup_llm_config(configuration)
         self._setup_context(configuration)
 
-        # Register in Redis
         self._announce_presence()
 
-        # Initialize LLM Interface
         from agent_framework.llm import LLM
 
         self.llm = LLM(
@@ -101,7 +88,6 @@ class BaseAgent:
 
     @property
     def context(self) -> AgentContext:
-        """Access the agent's state context."""
         return self.state
 
     def _setup_llm_config(self, config: Dict[str, Any]):
@@ -129,7 +115,6 @@ class BaseAgent:
             )
 
     def _announce_presence(self):
-        """Registers the agent node in the distributed graph."""
         model_display = self.llm_config.model_name
         if self.llm_config.reasoning_effort:
             model_display = (
@@ -155,36 +140,29 @@ class BaseAgent:
             db.set_root_agent_id(self.context.agent_id)
 
     async def start_lifecycle(self, primary_task: str) -> Dict[str, Any]:
-        """Begins the agent's main execution loop."""
         await self._initialize_task(primary_task)
         self.context.status = "running"
         self._persist_state()
 
-        # Start background monitor for stop signals
         monitor_task = asyncio.create_task(self._watch_status())
 
         try:
             while not self.context.should_terminate():
-                # Check for external stop request
                 if self._is_stop_requested():
                     break
 
-                # Handle incoming messages
                 await self._check_messages()
                 if self.context.should_terminate():
                     break
 
-                # Handle Waiting State
                 if self.context.waiting_for_input:
                     await self._wait_cycle()
                     continue
 
-                # Iteration Check
                 self.context.iteration += 1
                 if self.context.iteration > 0 and self.context.iteration % 50 == 0:
                     await self._compact_memory()
 
-                # Core Execution Step
                 try:
                     is_done = await self._execute_cycle()
                     if is_done:
@@ -209,7 +187,6 @@ class BaseAgent:
         self.context.task = task_desc
         formatted_task = f"Current Objective:\n<task>\n{task_desc}\n</task>"
 
-        # Idempotency check
         existing = any(
             m["role"] == "user" and task_desc in m.get("content", "")
             for m in self.context.messages
@@ -218,7 +195,6 @@ class BaseAgent:
             self.context.append_message("user", formatted_task)
 
     async def _execute_cycle(self) -> bool:
-        """Performs one cognitive cycle: Think -> Act."""
         prompt_history = self.context.get_history_for_llm()
 
         try:
@@ -234,13 +210,11 @@ class BaseAgent:
         reasoning_content = response.reasoning_content
 
         if llm_content and llm_content.strip() and llm_content.strip() != "\n":
-            # Normal case: we have actual content
             new_msg = self.context.append_message("assistant", llm_content)
             self._emit_message_event(new_msg)
         elif reasoning_content:
             display_content = f"Thinking Process:\n{reasoning_content}"
 
-            # Emit reasoning to UI for visibility (as assistant message for display)
             new_msg = self.context.append_message("assistant", display_content)
             self._emit_message_event(new_msg)
 
@@ -250,15 +224,12 @@ class BaseAgent:
 
             llm_content = display_content
         else:
-            # Empty response - will be handled by empty response logic below
             new_msg = self.context.append_message("assistant", llm_content or "")
             self._emit_message_event(new_msg)
 
-        # Dispatch Tools
         if tool_calls:
             return await self._dispatch_tools(tool_calls)
 
-        # Handling Empty Responses (Loop Detection)
         if not llm_content.strip():
             self.context.consecutive_empty_responses += 1
             if self.context.consecutive_empty_responses >= 5:
@@ -274,11 +245,9 @@ class BaseAgent:
         return False
 
     async def _dispatch_tools(self, tool_list: List[Dict[str, Any]]) -> bool:
-        """Runs the requested tools and updates history."""
         for t in tool_list:
             self.context.record_tool_use(t)
 
-        # We invoke the tool processor
         current_history = (
             self.context.messages
         )  # Direct reference modification by processor
@@ -299,14 +268,12 @@ class BaseAgent:
         return should_terminate
 
     async def _check_messages(self):
-        """Reads and processes the agent's inbox."""
         inbox = db.pop_all_messages_for_agent(self.context.agent_id)
         for msg in inbox:
             if msg.get("type") == "control":
                 if msg.get("content") == "stop":
                     self.context.signal_stop()
             else:
-                # Standard inter-agent message
                 sender = msg.get("from", "unknown")
                 body = msg.get("content", "")
                 formatted = (
@@ -317,7 +284,6 @@ class BaseAgent:
                 )
                 self.context.append_message("user", formatted)
 
-                # Wake up if sleeping
                 if self.context.waiting_for_input:
                     self.context.resume()
                     self.context.status = "running"
@@ -355,7 +321,6 @@ class BaseAgent:
             pass
 
     async def _watch_status(self):
-        """Background task to poll for kill signals."""
         while True:
             await asyncio.sleep(2)
             if self._is_stop_requested():
@@ -364,7 +329,6 @@ class BaseAgent:
                 break
 
     async def _wait_cycle(self):
-        # Placeholder for more complex wait logic (e.g., event listeners)
         await asyncio.sleep(1)
 
     def _handle_runtime_error(self, err: Exception):
@@ -374,5 +338,4 @@ class BaseAgent:
         self.context.signal_stop()
 
     async def _compact_memory(self):
-        # Future implementation: Context summarization
         pass

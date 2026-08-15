@@ -57,7 +57,6 @@ class TestSandboxClient:
 
     @pytest.mark.asyncio
     async def test_execute_tool_success(self, sandbox_client):
-        # Mock ensure_sandbox to return success
         sandbox_client.ensure_sandbox = AsyncMock(return_value={"status": "ok"})
 
         mock_response = MagicMock()
@@ -75,11 +74,6 @@ class TestSandboxClient:
             )
 
             assert result == {"result": "success"}
-            # First call is ensure_sandbox (mocked method), so we check httpx call
-            # Wait, we mocked ensure_sandbox method on the instance, but execute_tool creates a NEW httpx client
-            # The httpx client usage is inside execute_tool.
-            # We need to be careful: execute_tool calls self.ensure_sandbox FIRST.
-
             mock_post.assert_called_once()
             call_args = mock_post.call_args
             assert call_args[0][0] == "http://test-sandbox/execute"
@@ -91,7 +85,6 @@ class TestSandboxClient:
     async def test_execute_tool_http_error(self, sandbox_client):
         sandbox_client.ensure_sandbox = AsyncMock(return_value={"status": "ok"})
 
-        # Simulate HTTP error
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"

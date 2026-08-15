@@ -1,11 +1,3 @@
-"""
-Agent Manager Service - Standalone Agent Orchestrator
-
-This service manages the lifecycle of LLM agents, including creation,
-execution, and termination. It can run independently or be extended
-by integration layers for specialized use cases.
-"""
-
 import asyncio
 import logging
 import os
@@ -29,17 +21,10 @@ from agent_framework.services import agent_service
 from agent_framework.services.agent_spawner import set_routing_function
 from agent_framework.utils.logging_config import setup_logging
 
-# Configure logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# In-memory storage for active agents and their tasks
 active_agents: dict[str, dict[str, Any]] = {}
-
-
-# =============================================================================
-# Request/Response Models
-# =============================================================================
 
 
 class AgentCreationRequest(BaseModel):
@@ -68,17 +53,10 @@ class MessageRequest(BaseModel):
     sender: str = "user"
 
 
-# =============================================================================
-# Lifespan Management
-# =============================================================================
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
     logger.info("Agent Manager Service starting up.")
 
-    # Register the agent spawner for internal agent creation
     from agent_framework.services import agent_spawner
 
     agent_spawner.set_agent_starter(start_agent_task)
@@ -92,7 +70,6 @@ async def lifespan(app: FastAPI):
 
     yield
     logger.info("Agent Manager Service shutting down.")
-    # Clean up any running agent tasks
     for agent_id, agent_data in list(active_agents.items()):
         task = agent_data.get("task")
         if task and not task.done():
@@ -107,15 +84,7 @@ app = FastAPI(
 )
 
 
-# =============================================================================
-# Agent Execution
-# =============================================================================
-
-
 async def run_agent(agent: DefaultAgent, agent_state: AgentContext):
-    """
-    Wrapper to run the agent's execution logic and handle completion/errors.
-    """
     agent_id = agent_state.agent_id
     job_id = (
         agent_state.sandbox_info.get("job_id") if agent_state.sandbox_info else None
@@ -145,7 +114,6 @@ async def run_agent(agent: DefaultAgent, agent_state: AgentContext):
         state_manager.update_agent_status(agent_id, "error", str(e))
 
     finally:
-        # Remove the agent from the active list once it's done
         if agent_id in active_agents:
             del active_agents[agent_id]
             logger.info(f"Removed agent {agent_id} from active list.")
@@ -155,17 +123,9 @@ def start_agent_task(
     agent_config: dict[str, Any],
     job_config: dict[str, Any],
 ) -> tuple[str, AgentContext]:
-    """
-    Internal function to start an agent. Can be called from within the framework.
-
-    Returns:
-        Tuple of (agent_id, agent_state)
-    """
     llm_config = LLMConfig(**agent_config["llm_config"])
 
-    # Combine state from agent config with job-level settings
     state_params = agent_config["state"]
-
     agent_state = AgentContext(**state_params)
     agent_id = agent_state.agent_id
 
@@ -181,13 +141,11 @@ def start_agent_task(
 
     logger.info(f"Creating agent {agent_id} (Parent: {agent_state.parent_id})")
 
-    # Merge sandbox_info with job_config
     if agent_state.sandbox_info:
         agent_state.sandbox_info.update(job_config)
     else:
         agent_state.sandbox_info = job_config
 
-    # Ensure job_id exists
     if not agent_state.sandbox_info.get("job_id"):
         import uuid
 
@@ -198,19 +156,12 @@ def start_agent_task(
         )
 
     agent = DefaultAgent(config)
-    # Run the agent's main loop as a background task
     loop = asyncio.get_event_loop()
     task = loop.create_task(run_agent(agent, agent_state))
 
-    # Store the agent and its task
     active_agents[agent_id] = {"agent": agent, "task": task, "state": agent_state}
 
     return agent_id, agent_state
-
-
-# =============================================================================
-# API Endpoints
-# =============================================================================
 
 
 @app.post("/agents", status_code=202)
@@ -236,7 +187,6 @@ async def create_agent_simple(request: SimpleAgentRequest):
     Used for standalone operation without Core API.
     """
     try:
-        # Use agent service to build config
         config_result, agent_state = agent_service.create_agent_config(
             name=request.name,
             task=request.task,
@@ -247,14 +197,12 @@ async def create_agent_simple(request: SimpleAgentRequest):
             context=request.context,
         )
 
-        # Register in graph
         agent_service.register_agent_in_graph(
             agent_state,
             config_result["node_data"],
             request.job_id,
         )
 
-        # Start the agent
         agent_id, _ = start_agent_task(
             config_result["agent_config"],
             config_result["job_config"],
@@ -279,7 +227,6 @@ async def stop_agent(agent_id: str):
     Forces a running agent to stop by cancelling its task.
     """
     if agent_id not in active_agents:
-        # Check if it exists in state to avoid 404 if just not running
         status = state_manager.get_agent_status(agent_id)
         if not status:
             raise HTTPException(status_code=404, detail="Agent not found")
@@ -311,11 +258,9 @@ async def delete_agent(agent_id: str):
     """
     Stops the agent (if running) and deletes its data (history, state) from Redis.
     """
-    # 1. Stop if running
     if agent_id in active_agents:
         await stop_agent(agent_id)
 
-    # 2. Delete data
     try:
         state_manager.delete_agent(agent_id)
         return {"message": f"Agent {agent_id} deleted successfully."}
@@ -330,7 +275,6 @@ async def get_agent_status(agent_id: str):
     Gets the status of a running agent.
     """
     if agent_id not in active_agents:
-        # If not in memory, check Redis for a final status
         status = state_manager.get_agent_status(agent_id)
         if status:
             return {"agent_id": agent_id, "status": status}
@@ -354,13 +298,11 @@ async def get_agent_details(agent_id: str):
     """
     Gets the full details (state) of an agent, including history.
     """
-    # 1. Try active agents (most fresh)
     if agent_id in active_agents:
         state = active_agents[agent_id].get("state")
         if state:
             return state.model_dump()
 
-    # 2. Try Redis (persisted state)
     state = state_manager.get_agent_state(agent_id)
     if state:
         return state.model_dump()
@@ -373,7 +315,6 @@ async def send_message(agent_id: str, request: MessageRequest):
     """
     Sends a message to an agent.
     """
-    # Get job_id from active agent or Redis
     job_id = None
     if agent_id in active_agents:
         state = active_agents[agent_id].get("state")
@@ -436,11 +377,6 @@ async def health_check():
     return {"status": "healthy", "active_agents": len(active_agents)}
 
 
-# =============================================================================
-# Single-shot completion
-# =============================================================================
-
-
 class CompletionRequest(BaseModel):
     """One completion, with no agent wrapped around it."""
 
@@ -488,11 +424,6 @@ async def create_completion(request: CompletionRequest):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-# =============================================================================
-# Tool Execution
-# =============================================================================
-
-
 class ToolExecutionRequest(BaseModel):
     """Request to execute a tool."""
 
@@ -524,15 +455,12 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
 
     logger.info(f"Executing tool '{tool_name}' for agent {agent_id}")
 
-    # Handle orchestration tools locally
     if tool_name == "spawn_sub_agent":
-        # Get parent agent state from active agents
         parent_state = None
         if agent_id in active_agents:
             parent_state = active_agents[agent_id].get("state")
 
         if parent_state is None:
-            # Try to reconstruct minimal state
             from agent_framework.agents.state import AgentContext
 
             parent_state = AgentContext(
@@ -554,7 +482,6 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
         else:
             return {"error": "Agent spawner not available"}
 
-    # Route sandboxed tools to sandbox-runtime
     if should_execute_in_sandbox(tool_name):
         if not sandbox_client.is_available:
             return {
@@ -570,7 +497,6 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
         )
         return result
 
-    # Execute non-sandboxed tools locally
     tool_func = get_tool_by_name(tool_name)
     if not tool_func:
         return {"error": f"Tool '{tool_name}' not found"}
@@ -579,7 +505,6 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
         from agent_framework.tools.executor import _execute_tool_locally
         from agent_framework.agents.state import AgentContext
 
-        # Create minimal agent state for context
         agent_state = None
         if agent_id in active_agents:
             agent_state = active_agents[agent_id].get("state")
@@ -597,11 +522,6 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
     except Exception as e:
         logger.exception(f"Tool execution failed: {e}")
         return {"error": f"Tool execution failed: {str(e)}"}
-
-
-# =============================================================================
-# Main Entry Point
-# =============================================================================
 
 
 if __name__ == "__main__":

@@ -1,12 +1,4 @@
-"""
-ShellExecutor: Async wrapper for persistent tmux-based shell session.
-
-Provides reliable command execution with proper output capture and exit code tracking.
-Uses a unique marker system to detect command completion.
-"""
-
 import asyncio
-import logging
 import re
 import time
 import uuid
@@ -15,16 +7,8 @@ from typing import Optional
 
 import libtmux
 
-logger = logging.getLogger(__name__)
-
 
 class ShellExecutor:
-    """
-    Async wrapper for a persistent tmux-based shell session.
-    Provides methods to execute commands, handle input, and manage the session lifecycle.
-    """
-
-    # Unique marker prefix to identify command boundaries
     MARKER_PREFIX = "__AG_CMD__"
 
     def __init__(self, session_id: str, work_dir: str = "/workspace"):
@@ -40,10 +24,8 @@ class ShellExecutor:
         self._initialize()
 
     def _initialize(self):
-        """Sets up the tmux session and pane."""
         session_name = f"ag-exec-{self.id}-{uuid.uuid4().hex[:4]}"
 
-        # Kill if exists (shouldn't happen with unique names, but safety first)
         if self.server.has_session(session_name):
             self.server.kill_session(session_name)
 
@@ -58,8 +40,6 @@ class ShellExecutor:
 
         self.pane = self.tmux_session.active_window.active_pane
 
-        # Configure minimal prompt - we'll handle markers per-command
-        # Send each command with a small delay to ensure shell processes them
         init_cmds = [
             "exec bash --noprofile --norc",
             "export TERM=xterm",
@@ -75,12 +55,10 @@ class ShellExecutor:
             self.pane.send_keys(cmd, enter=True)
             time.sleep(0.1)
 
-        # Final clear and reset history
         time.sleep(0.2)
         self.pane.send_keys("clear", enter=True)
         time.sleep(0.2)
 
-        # Clear history multiple times to ensure it's clean
         self.pane.cmd("clear-history")
         time.sleep(0.1)
         self.pane.cmd("clear-history")
@@ -92,14 +70,10 @@ class ShellExecutor:
         return self.active and self.tmux_session is not None
 
     def _generate_marker(self) -> str:
-        """Generate a unique marker for command tracking."""
         return f"{self.MARKER_PREFIX}{uuid.uuid4().hex[:8]}"
 
     def _sanitize_output(self, content: str) -> str:
-        """Remove internal markers and clean up output for display."""
-        # Remove all marker lines (START/END markers with any suffix)
         content = re.sub(rf"{re.escape(self.MARKER_PREFIX)}[^\n]*\n?", "", content)
-        # Clean up excessive whitespace
         content = re.sub(r"\n{3,}", "\n\n", content)
         return content.strip()
 
@@ -110,16 +84,11 @@ class ShellExecutor:
         is_input: bool = False,
         no_enter: bool = False,
     ) -> dict:
-        """
-        Runs a command or sends input to the shell.
-        """
         if not self.is_active:
             return {"error": "Session inactive", "status": "error"}
 
-        # Handle interrupt request to unblock a busy session
         if cmd.strip() == "^C":
             self.pane.send_keys("C-c")
-            # Wait briefly for the process to terminate
             await asyncio.sleep(0.5)
             self.busy = False
             return {
@@ -130,16 +99,12 @@ class ShellExecutor:
                 "terminal_id": self.id,
             }
 
-        # If session is busy, we check if the user is just trying to wait
-        # "Waiting" is defined as sending an empty command or a comment
         is_wait_command = not cmd.strip() or cmd.strip().startswith("#")
 
         if self.busy:
             if is_wait_command and not is_input:
-                # User wants to wait for the running command to finish
                 return await self._wait_for_marker(timeout)
             elif not is_input:
-                # User is trying to run a new command while busy
                 return {
                     "error": "Session is busy with a running command (e.g., blocking call like 'top'). "
                     "Use 'require_input=True' to interact with it, send '^C' to interrupt, "
@@ -163,9 +128,6 @@ class ShellExecutor:
         return await self._execute_command(cmd, timeout)
 
     async def _execute_command(self, cmd: str, timeout: float) -> dict:
-        """Execute a command and wait for completion with marker detection."""
-
-        # Mark session as busy
         self.busy = True
 
         try:
@@ -180,38 +142,30 @@ class ShellExecutor:
                     "terminal_id": self.id,
                 }
 
-            # Generate unique marker for this command
             marker = self._generate_marker()
             self.current_start_marker = f"{marker}_START"
             self.current_end_marker = f"{marker}_END"
 
-            # Clear history to avoid stale data
             self.pane.cmd("clear-history")
             await asyncio.sleep(0.05)
 
-            # Build wrapped command: echo start marker, run command, echo end marker with exit code
-            # Using a compound command ensures we capture the actual exit code
-            # We add a newline before the end marker to handle heredocs correctly
+            # Newline before the end marker keeps heredocs intact.
             wrapped_cmd = f"echo '{self.current_start_marker}'; {cmd}\necho '{self.current_end_marker}'$?"
             self.pane.send_keys(wrapped_cmd, enter=True)
 
             return await self._wait_for_marker(timeout)
 
         except Exception:
-            # If a crash happens, we reset busy state to allow recovery attempts
             self.busy = False
             raise
 
     async def _wait_for_marker(self, timeout: float) -> dict:
-        """Wait for the active command marker to appear."""
         start_ts = time.time()
 
-        # Inherit markers from instance state
         start_marker = getattr(self, "current_start_marker", "")
         end_marker = getattr(self, "current_end_marker", "")
 
         if not start_marker or not end_marker:
-            # No active command to wait for?
             self.busy = False
             return {"error": "No active command context to wait for", "status": "error"}
 
@@ -219,24 +173,20 @@ class ShellExecutor:
             await asyncio.sleep(0.15)
             output = self._read_buffer()
 
-            # Look for our end marker with exit code
             end_pattern = rf"{re.escape(end_marker)}(\d+)"
             match = re.search(end_pattern, output)
 
             if match:
                 exit_code = int(match.group(1))
 
-                # Extract content between start and end markers
                 start_pattern = rf"{re.escape(start_marker)}\n?"
                 start_match = re.search(start_pattern, output)
 
                 if start_match:
-                    # Content is between end of start marker and start of end marker
                     content_start = start_match.end()
                     content_end = match.start()
                     content = output[content_start:content_end]
 
-                    # Clean up the content
                     content = content.strip()
                     content = self._sanitize_output(content)
 
@@ -249,8 +199,7 @@ class ShellExecutor:
                         "terminal_id": self.id,
                     }
 
-        # Timeout - sanitize output to hide any markers
-        # NOTE: We leave self.busy = True because the command is likely still running
+        # We leave self.busy = True: the command is likely still running.
         return {
             "content": self._sanitize_output(self._read_buffer()),
             "status": "running",
@@ -260,13 +209,11 @@ class ShellExecutor:
         }
 
     def _read_buffer(self) -> str:
-        """Read the current tmux pane buffer."""
         if not self.pane:
             return ""
         return "\n".join(self.pane.cmd("capture-pane", "-p", "-J", "-S", "-").stdout)
 
     def terminate(self):
-        """Kills the tmux session."""
         if self.tmux_session:
             try:
                 self.server.kill_session(self.tmux_session.name)

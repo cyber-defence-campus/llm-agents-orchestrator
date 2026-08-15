@@ -9,10 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class DefaultAgent(BaseAgent):
-    """
-    The default agent for orchestrating and managing the overall job.
-    """
-
     default_llm_config = LLMConfig(prompt_modules=["coordination/root_agent"])
 
     def __init__(self, config: dict[str, Any]):
@@ -28,7 +24,6 @@ class DefaultAgent(BaseAgent):
         """
         task_description = self.state.task or ""
 
-        # Append user instructions/context if not already present in task
         user_instructions = job_config.get("user_instructions", "")
         context = job_config.get("context")
 

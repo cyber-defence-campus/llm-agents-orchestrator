@@ -33,7 +33,6 @@ def get_available_prompt_modules() -> dict[str, list[str]]:
                     if module_name not in available_modules[category_name]:
                         available_modules[category_name].append(module_name)
 
-    # Sort modules in each category
     for category in available_modules:
         available_modules[category].sort()
 
@@ -93,7 +92,6 @@ def load_prompt_modules(
     logger = logging.getLogger(__name__)
     module_content = {}
 
-    # All possible prompt roots
     prompts_dirs = [Path(__file__).parent]
     extra_paths_env = os.getenv("AGENT_PROMPT_PATHS", "")
     if extra_paths_env:
@@ -109,7 +107,6 @@ def load_prompt_modules(
         try:
             module_path = None
 
-            # Try to find which directory contains this module
             if "/" in module_name:
                 module_rel_path = f"{module_name}.jinja"
                 for p_dir in prompts_dirs:

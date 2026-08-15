@@ -1,14 +1,12 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, ANY
+from unittest.mock import patch, MagicMock, AsyncMock
 from agent_framework.tools.executor import (
     execute_tool,
     execute_tool_with_validation,
     process_tool_invocations,
-    should_execute_in_sandbox,
 )
 
 
-# Mock AgentState
 @pytest.fixture
 def mock_agent_state():
     state = MagicMock()
@@ -30,7 +28,6 @@ def mock_sandbox_client():
 class TestExecutorExecution:
     @pytest.mark.asyncio
     async def test_execute_local_tool_success(self, mock_agent_state):
-        # Mock a local tool
         mock_tool = MagicMock(return_value="tool output")
         mock_tool.__name__ = "local_tool"
 
@@ -44,14 +41,12 @@ class TestExecutorExecution:
 
             assert result == "tool output"
             mock_tool.assert_called_once()
-            # Verify args were passed (checking simplified call)
             assert mock_tool.call_args[1]["arg1"] == "val1"
 
     @pytest.mark.asyncio
     async def test_execute_sandboxed_tool_direct(
         self, mock_agent_state, mock_sandbox_client
     ):
-        # Setup environment for sandbox
         with patch.dict(
             "os.environ", {"AGENT_SANDBOX_URL": "http://mock-sandbox"}
         ), patch(
@@ -65,7 +60,6 @@ class TestExecutorExecution:
             assert result == {"result": "sandbox output"}
             mock_sandbox_client.execute_tool.assert_awaited_once()
 
-            # Verify arguments passed to sandbox client
             call_kwargs = mock_sandbox_client.execute_tool.call_args[1]
             assert call_kwargs["tool_name"] == "sandbox_tool"
             assert call_kwargs["session_id"] == "test-job"
@@ -91,11 +85,9 @@ class TestExecutorExecution:
         ), patch(
             "agent_framework.tools.executor.execute_tool", new_callable=AsyncMock
         ) as mock_exec:
-            # Test valid tool
             await execute_tool_with_validation("valid_tool", mock_agent_state)
             mock_exec.assert_called_once()
 
-            # Test invalid tool
             mock_exec.reset_mock()
             result = await execute_tool_with_validation(
                 "invalid_tool", mock_agent_state
@@ -107,7 +99,6 @@ class TestExecutorExecution:
 class TestToolProcessing:
     @pytest.mark.asyncio
     async def test_process_tool_invocations_parallel(self, mock_agent_state):
-        # Mock execution to be fast
         with patch(
             "agent_framework.tools.executor.execute_tool_invocation",
             new_callable=AsyncMock,
@@ -123,15 +114,12 @@ class TestToolProcessing:
             await process_tool_invocations(invocations, history, mock_agent_state)
 
             assert mock_exec.call_count == 2
-            # Check history population
-            assert len(history) >= 2  # Calls and Results might be appended
+            assert len(history) >= 2
 
-            # Check we have tool_calls and tool_results
             roles = [msg["role"] for msg in history]
             assert "tool_call" in roles
             assert "tool_result" in roles
 
-            # Verify user observation message was added (XML)
             assert history[-1]["role"] == "user"
             assert "<tool_result>" in history[-1]["content"]
 
@@ -151,7 +139,6 @@ class TestToolProcessing:
 
             await process_tool_invocations(invocations, history, mock_agent_state)
 
-            # Verify result in history
             result_entry = next(
                 entry for entry in history if entry["role"] == "tool_result"
             )
@@ -163,25 +150,21 @@ class TestToolProcessing:
 
 
 class TestToolDeduplication:
-    """Tests for tool invocation deduplication logic."""
-
     def test_deduplicate_keeps_order(self):
-        """Test that first occurrence is kept."""
         from agent_framework.tools.executor import _deduplicate_invocations
 
         invocations = [
             {"toolName": "tool_a", "args": {"id": "first"}},
             {"toolName": "tool_b", "args": {}},
-            {"toolName": "tool_a", "args": {"id": "first"}},  # Duplicate
+            {"toolName": "tool_a", "args": {"id": "first"}},
         ]
 
         result = _deduplicate_invocations(invocations)
 
         assert len(result) == 2
-        assert result[0]["args"]["id"] == "first"  # First occurrence kept
+        assert result[0]["args"]["id"] == "first"
 
     def test_deduplicate_different_tools_same_args(self):
-        """Test that same args with different tool names are not deduplicated."""
         from agent_framework.tools.executor import _deduplicate_invocations
 
         invocations = [

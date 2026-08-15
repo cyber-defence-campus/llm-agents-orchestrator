@@ -9,8 +9,6 @@ from pythonjsonlogger import jsonlogger
 
 
 class ColorFormatter(logging.Formatter):
-    """A logging formatter that adds color to the output."""
-
     grey = "\x1b[38;20m"
     blue = "\x1b[34;20m"
     yellow = "\x1b[33;20m"

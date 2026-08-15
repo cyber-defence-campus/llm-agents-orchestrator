@@ -1,10 +1,3 @@
-"""
-Sandbox Client - HTTP client for communicating with sandbox-runtime service.
-
-This client enables the orchestrator to execute sandboxed tools in isolated
-container environments managed by sandbox-runtime.
-"""
-
 import logging
 import os
 import uuid
@@ -16,25 +9,20 @@ logger = logging.getLogger("agent_framework.services.sandbox_client")
 
 
 class SandboxClient:
-    """Client for sandbox-runtime service."""
-
     def __init__(self, base_url: str | None = None):
         self._explicit_base_url = base_url
 
     @property
     def base_url(self) -> str:
-        """Get base URL, checking environment dynamically each time."""
         if self._explicit_base_url:
             return self._explicit_base_url
         return os.getenv("AGENT_SANDBOX_URL", "")
 
     @property
     def is_available(self) -> bool:
-        """Check if sandbox URL is configured."""
         return bool(self.base_url)
 
     async def ensure_sandbox(self, session_id: str) -> dict[str, Any]:
-        """Ensures a sandbox exists for the given session ID."""
         async with httpx.AsyncClient(timeout=300.0) as client:
             logger.debug(f"Ensuring sandbox for run {session_id}")
             payload = {"session_id": session_id}
@@ -50,19 +38,6 @@ class SandboxClient:
         kwargs: dict[str, Any],
         correlation_id: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Executes a tool in the sandbox container.
-
-        Args:
-            session_id: The session identifier
-            agent_id: The agent making the request
-            tool_name: Name of the tool to execute
-            kwargs: Arguments for the tool
-            correlation_id: Optional correlation ID for tracing
-
-        Returns:
-            Tool execution result or error dict
-        """
         if not self.base_url:
             return {
                 "error": "AGENT_SANDBOX_URL not configured. Cannot execute sandboxed tools."
@@ -82,7 +57,6 @@ class SandboxClient:
 
         async with httpx.AsyncClient(timeout=None) as client:
             try:
-                # Ensure sandbox exists first
                 sandbox_info = await self.ensure_sandbox(session_id)
                 if sandbox_info.get("error"):
                     return sandbox_info
@@ -115,9 +89,6 @@ class SandboxClient:
     async def inject_file(
         self, session_id: str, src_path: str, dest_path: str
     ) -> dict[str, Any]:
-        """
-        Injects a file from the host into the sandbox container.
-        """
         if not self.base_url:
             return {"error": "AGENT_SANDBOX_URL not configured"}
 
@@ -125,7 +96,6 @@ class SandboxClient:
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
-                # Ensure sandbox exists first
                 await self.ensure_sandbox(session_id)
 
                 logger.info(
@@ -144,9 +114,6 @@ class SandboxClient:
                 return {"error": f"Sandbox injection failed: {e.response.text}"}
 
     async def destroy_sandbox(self, session_id: str) -> dict[str, Any]:
-        """
-        Destroys the sandbox container for a session.
-        """
         if not self.base_url:
             return {"error": "AGENT_SANDBOX_URL not configured"}
 
@@ -166,5 +133,4 @@ class SandboxClient:
                 return {"error": f"Failed to destroy sandbox: {e}"}
 
 
-# Global instance
 sandbox_client = SandboxClient()

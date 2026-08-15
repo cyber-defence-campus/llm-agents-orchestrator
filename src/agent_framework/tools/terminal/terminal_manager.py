@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from .shell_session import ShellExecutor
 
@@ -9,11 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class TerminalToolManager:
-    """
-    Registry for managing multiple ShellExecutor sessions.
-    Allows executing commands across different isolated terminals.
-    """
-
     _instance = None
     _lock = threading.Lock()
 
@@ -41,7 +36,6 @@ class TerminalToolManager:
 
             executor = self._executors[session_id]
 
-            # Auto-heal if dead
             if not executor.is_active:
                 self._executors[session_id] = ShellExecutor(session_id)
                 executor = self._executors[session_id]
@@ -56,9 +50,6 @@ class TerminalToolManager:
         terminal_id: str | None = None,
         no_enter: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Main entry point for executing terminal commands.
-        """
         tid = terminal_id or self._default_id
         t_out = timeout if timeout is not None else 30.0
 
@@ -93,7 +84,6 @@ class TerminalToolManager:
             self._executors.clear()
 
 
-# Singleton Accessor
 _terminal_manager = TerminalToolManager()
 
 

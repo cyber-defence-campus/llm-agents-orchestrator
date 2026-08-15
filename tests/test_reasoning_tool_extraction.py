@@ -2,7 +2,6 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from agent_framework.llm.llm import LLM, LLMConfig
 
-# Mock data
 MOCK_CONFIG = LLMConfig(
     model_name="test-provider/test-model",
     api_key="test-key",
@@ -37,10 +36,9 @@ class TestReasoningToolExtraction:
         </function>
         """
 
-        # Mock response with empty content but populated reasoning_content
         mock_response = MagicMock()
         mock_message = MagicMock()
-        mock_message.content = "\n"  # Empty-ish content
+        mock_message.content = "\n"
         mock_message.reasoning_content = reasoning_xml
         mock_message.provider_specific_fields = {}
 
@@ -60,9 +58,6 @@ class TestReasoningToolExtraction:
     async def test_tool_in_reasoning_content_via_provider_fields(
         self, llm_instance, mock_queue
     ):
-        """
-        Test extraction when reasoning_content is in provider_specific_fields
-        """
         reasoning_xml = """<function=test_tool><parameter=x>1</parameter></function>"""
 
         mock_response = MagicMock()
@@ -84,9 +79,6 @@ class TestReasoningToolExtraction:
 
     @pytest.mark.asyncio
     async def test_mixed_tools_content_and_reasoning(self, llm_instance, mock_queue):
-        """
-        Test that tools are extracted from BOTH content and reasoning_content and merged.
-        """
         content_xml = """<function=tool_A><parameter=a>1</parameter></function>"""
         reasoning_xml = """<function=tool_B><parameter=b>2</parameter></function>"""
 

@@ -104,6 +104,27 @@ MODELS_WITHOUT_STOP_WORDS = ["o1", "o1-preview", "o1-mini", "o3-mini"]
 REASONING_EFFORT_SUPPORTED_MODELS = ["o1", "o1-preview", "o1-mini", "o3-mini"]
 
 
+def _resolve_provider_connection(
+    model_name: str | None, api_key: str | None, api_base: str | None
+) -> tuple[str | None, dict[str, Any]]:
+    """Provider, api_key and api_base resolution shared by _make_request and complete()."""
+    args: dict[str, Any] = {}
+    provider = model_name.split("/")[0] if model_name and "/" in model_name else None
+    if provider:
+        args["custom_llm_provider"] = provider
+
+    if api_key:
+        args["api_key"] = api_key
+    elif provider and (key := os.getenv(f"{provider.upper()}_API_KEY")):
+        args["api_key"] = key.strip("'")
+
+    if api_base:
+        args["api_base"] = api_base
+    elif api_base_env := (os.getenv("LLM_API_BASE") or os.getenv("OLLAMA_API_BASE")):
+        args["api_base"] = api_base_env
+
+    return provider, args
+
 
 def openrouter_routing() -> dict[str, Any] | None:
     """OpenRouter provider pin, from OPENROUTER_PROVIDER_ORDER.
@@ -159,7 +180,6 @@ class LLM:
 
             search_paths = []
 
-            # 1. Add external prompt paths (highest priority)
             extra_paths_env = os.getenv("AGENT_PROMPT_PATHS", "")
             if extra_paths_env:
                 for path in extra_paths_env.split(os.pathsep):
@@ -175,7 +195,6 @@ class LLM:
                             if subdir.is_dir() and not subdir.name.startswith("__"):
                                 search_paths.append(subdir)
 
-            # 2. Add local paths
             search_paths.append(prompt_dir)
             search_paths.append(prompts_dir)
 
@@ -217,8 +236,6 @@ class LLM:
                 }
                 if agent_state:
                     render_params["context"] = agent_state.context_data
-                    # Unpack context values as top-level template variables
-                    # so templates can use {% if varname %} directly
                     if agent_state.context_data:
                         render_params.update(agent_state.context_data)
 
@@ -407,7 +424,6 @@ class LLM:
                     content = response.choices[0].message.content
                     raw_content = content
 
-                # specific handling for provider reasoning content
                 reasoning_content = getattr(
                     response.choices[0].message, "reasoning_content", None
                 )
@@ -609,25 +625,10 @@ class LLM:
         if self.config.temperature is not None:
             completion_args["temperature"] = self.config.temperature
 
-        provider = None
-        if self.config.model_name and "/" in self.config.model_name:
-            provider = self.config.model_name.split("/")[0]
-            completion_args["custom_llm_provider"] = provider
-
-        if self.config.api_key:
-            completion_args["api_key"] = self.config.api_key
-        elif provider:
-            api_key_env = f"{provider.upper()}_API_KEY"
-            api_key = os.getenv(api_key_env)
-            if api_key:
-                completion_args["api_key"] = api_key.strip("'")
-
-        if self.config.api_base:
-            completion_args["api_base"] = self.config.api_base
-        else:
-            api_base = os.getenv("LLM_API_BASE") or os.getenv("OLLAMA_API_BASE")
-            if api_base:
-                completion_args["api_base"] = api_base
+        provider, connection_args = _resolve_provider_connection(
+            self.config.model_name, self.config.api_key, self.config.api_base
+        )
+        completion_args.update(connection_args)
 
         if self._should_include_stop_param():
             completion_args["stop"] = ["</function>"]
@@ -705,19 +706,10 @@ async def complete(
         "timeout": config.request_timeout,
     }
 
-    provider = model_name.split("/")[0] if "/" in model_name else None
-    if provider:
-        args["custom_llm_provider"] = provider
-
-    if config.api_key:
-        args["api_key"] = config.api_key
-    elif provider and (key := os.getenv(f"{provider.upper()}_API_KEY")):
-        args["api_key"] = key.strip("'")
-
-    if config.api_base:
-        args["api_base"] = config.api_base
-    elif api_base_env := (os.getenv("LLM_API_BASE") or os.getenv("OLLAMA_API_BASE")):
-        args["api_base"] = api_base_env
+    provider, connection_args = _resolve_provider_connection(
+        model_name, config.api_key, config.api_base
+    )
+    args.update(connection_args)
 
     if config.temperature is not None:
         args["temperature"] = config.temperature

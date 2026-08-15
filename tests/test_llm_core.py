@@ -1,10 +1,9 @@
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock, ANY
-from agent_framework.llm.llm import LLM, LLMConfig, RequestStats
+from unittest.mock import MagicMock, patch, AsyncMock
+from agent_framework.llm.llm import LLM, LLMConfig
 from agent_framework.llm.types import LLMRequestFailedError
 import litellm
 
-# Mock data
 MOCK_CONFIG = LLMConfig(
     model_name="test-provider/test-model",
     api_key="test-key",
@@ -38,14 +37,12 @@ class TestLLMCore:
         assert hasattr(llm_instance, "jinja_env")
 
     def test_prompt_caching_logic(self, llm_instance):
-        # Setup specific config for caching
         llm_instance.config.model_name = "anthropic/claude-3-5-sonnet-20240620"
 
         messages = [
             {"role": "system", "content": "System prompt"},
             {"role": "user", "content": "Msg 1"},
             {"role": "assistant", "content": "Msg 2"},
-            # Add enough messages to trigger caching interval
         ] + [{"role": "user", "content": f"Msg {i}"} for i in range(3, 15)]
 
         with patch(
@@ -53,11 +50,9 @@ class TestLLMCore:
         ):
             cached_msgs = llm_instance._prepare_cached_messages(messages)
 
-            # System prompt should be cached
             assert isinstance(cached_msgs[0]["content"], list)
             assert cached_msgs[0]["content"][-1]["cache_control"]["type"] == "ephemeral"
 
-            # Check for other cached messages
             cached_count = sum(
                 1
                 for msg in cached_msgs[1:]
@@ -68,7 +63,6 @@ class TestLLMCore:
 
     @pytest.mark.asyncio
     async def test_generate_success(self, llm_instance, mock_queue):
-        # Mock successful response
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(
@@ -88,11 +82,10 @@ class TestLLMCore:
         assert response.content == "Hello world"
         assert response.role == "agent"
 
-        # Verify request parameters
         mock_queue.make_request.assert_awaited_once()
         call_args = mock_queue.make_request.call_args[0][0]
         assert call_args["model"] == MOCK_CONFIG.model_name
-        assert len(call_args["messages"]) >= 2  # System + User
+        assert len(call_args["messages"]) >= 2
 
     @pytest.mark.asyncio
     async def test_usage_stats_update(
@@ -105,20 +98,17 @@ class TestLLMCore:
             MagicMock(message=MagicMock(content="OK", reasoning_content=None))
         ]
 
-        # Mock completion_cost
         with patch("agent_framework.llm.llm.completion_cost", return_value=0.002):
             mock_queue.make_request.return_value = mock_response
             llm_instance.job_id = "job-123"
 
             await llm_instance.generate([], job_id="job-123")
 
-            # Check internal stats
             stats = llm_instance.usage_stats
             assert stats["total"]["input_tokens"] == 100
             assert stats["total"]["output_tokens"] == 50
             assert stats["total"]["cost"] == 0.002
 
-            # Check redis update
             mock_redis_manager.increment_usage_stats.assert_called_once()
             _, kwargs = mock_redis_manager.increment_usage_stats.call_args
             assert kwargs["input_tokens"] == 100
@@ -158,15 +148,12 @@ class TestLLMCore:
         assert "User msg" in messages[0]["content"][0]["text"]
 
     def test_ensure_list_content(self, llm_instance):
-        # String -> List
         res = llm_instance._ensure_list_content("text")
         assert res == [{"type": "text", "text": "text"}]
 
-        # List[str] -> List[dict] (legacy format fix)
         res = llm_instance._ensure_list_content(["line1", "line2"])
         assert res == [{"type": "text", "text": "line1\nline2"}]
 
-        # List[dict] -> List[dict] (no change)
         original = [{"type": "image", "url": "..."}]
         res = llm_instance._ensure_list_content(original)
         assert res == original

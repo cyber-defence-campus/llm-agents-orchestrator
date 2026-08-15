@@ -3,7 +3,6 @@ import inspect
 import json
 import logging
 import os
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 from agent_framework.utils.id_utils import generate_ulid
@@ -49,7 +48,6 @@ async def execute_tool(
         f"Sandbox mode: {sandbox_mode_enabled}, Sandboxed: {is_sandboxed}, Orchestration: {is_orchestration_tool}"
     )
 
-    # Audit Logging for shell commands
     if tool_name == "run_shell_command":
         try:
             from agent_framework.utils.audit import log_command
@@ -62,18 +60,14 @@ async def execute_tool(
         except Exception as e:
             logger.error(f"Failed to audit shell command in executor: {e}")
 
-    # If running inside sandbox CONTAINER (tool_server), execute locally
     if is_sandbox_runtime:
         return await _execute_tool_locally(tool_name, agent_state, **kwargs)
 
-    # Handle orchestration tools (like spawn_sub_agent)
     if is_orchestration_tool:
         result = await _try_local_orchestration(tool_name, agent_state, **kwargs)
         if result is not None:
             return result
-        # Fall through to Core API delegation if local fails
 
-    # Handle sandboxed tools
     if is_sandboxed:
         result = await _try_direct_sandbox_execution(tool_name, agent_state, **kwargs)
         if result is not None:
@@ -82,16 +76,13 @@ async def execute_tool(
         logger.info(
             f"Direct sandbox execution of '{tool_name}' returned None, falling through to Core API"
         )
-        # Fall through to Core API delegation if direct fails
 
-    # If tool needs remote execution but local/direct failed, try Core API
     if is_sandboxed or is_orchestration_tool:
         core_api_url = os.getenv("CORE_API_URL")
         if core_api_url:
             logger.info(f"Delegating '{tool_name}' to Core API at {core_api_url}")
             return await _delegate_tool_to_core_api(tool_name, agent_state, **kwargs)
         else:
-            # Diagnostics for the error message
             sandbox_url = os.getenv("AGENT_SANDBOX_URL")
             job_id_status = "missing"
             if (
@@ -112,7 +103,6 @@ async def execute_tool(
                 f"Set AGENT_SANDBOX_URL for sandbox tools or configure external API delegation. (Debug: {error_details})"
             }
 
-    # Non-sandboxed, non-orchestration tools execute locally
     return await _execute_tool_locally(tool_name, agent_state, **kwargs)
 
 
@@ -135,14 +125,12 @@ async def _try_local_orchestration(
         if is_spawner_available():
             logger.info(f"Executing '{tool_name}' via local agent spawner")
 
-            # Parse capabilities
             prompt_modules = kwargs.get("capabilities")
             if isinstance(prompt_modules, str):
                 prompt_modules = [
                     m.strip() for m in prompt_modules.split(",") if m.strip()
                 ]
 
-            # Extract IDs for event publishing
             tool_call_id = kwargs.get("tool_call_id")
             tool_result_id = kwargs.get("tool_result_id")
 
@@ -241,7 +229,6 @@ async def _try_direct_sandbox_execution(
             f"Executing '{tool_name}' via direct sandbox connection (job_id={job_id})"
         )
 
-        # Remove IDs from kwargs
         remote_kwargs = kwargs.copy()
         remote_kwargs.pop("tool_call_id", None)
         remote_kwargs.pop("tool_result_id", None)
@@ -264,7 +251,6 @@ async def _try_direct_sandbox_execution(
         )
 
         if agent_state:
-            # Check for error in result dict
             is_error = False
             error_msg = None
             if isinstance(result, dict) and result.get("error"):
@@ -304,9 +290,6 @@ async def _try_direct_sandbox_execution(
 async def _delegate_tool_to_core_api(
     tool_name: str, agent_state: Any, **kwargs: Any
 ) -> Any:
-    """
-    Called by an Agent Worker to delegate tool execution to the Core API.
-    """
     core_api_url = os.getenv("CORE_API_URL")
     if not core_api_url:
         raise RuntimeError("CORE_API_URL environment variable is not set for worker.")
@@ -374,7 +357,6 @@ async def _delegate_tool_to_core_api(
                 f"--- END DELEGATING TOOL (Agent: {agent_state.agent_id}, Tool: {tool_name}) ---"
             )
 
-            # Publish tool_result event
             _publish_tool_event(
                 job_id,
                 "tool_result",
@@ -454,7 +436,6 @@ def _publish_tool_event(
     error: str | None = None,
     id: str | None = None,
 ) -> None:
-    """Helper to publish tool-related events to Redis safely."""
     if is_sandbox_runtime or not job_id:
         return
 
@@ -479,10 +460,8 @@ def _publish_tool_event(
 async def _execute_tool_locally(
     tool_name: str, agent_state: Any | None, **kwargs: Any
 ) -> Any:
-    # Executes a tool directly in the current process (Worker or Sandbox).
     agent_id = agent_state.agent_id if agent_state else "sandbox"
 
-    # Extract IDs if present, ensuring they don't get passed to the tool
     tool_call_id = kwargs.pop("tool_call_id", None)
     tool_result_id = kwargs.pop("tool_result_id", None)
 
@@ -608,7 +587,6 @@ async def _execute_tool_locally(
 
 
 def validate_tool_availability(tool_name: str | None) -> tuple[bool, str]:
-    # Checks if a tool name is valid and registered.
     if tool_name is None:
         return False, "Tool name is missing"
 
@@ -621,7 +599,6 @@ def validate_tool_availability(tool_name: str | None) -> tuple[bool, str]:
 async def execute_tool_with_validation(
     target_tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
-    # Validates tool name before attempting execution.
     is_valid, error_msg = validate_tool_availability(target_tool_name)
     if not is_valid:
         return {"error": error_msg, "type": "ValidationError"}
@@ -634,7 +611,6 @@ async def execute_tool_with_validation(
 async def execute_tool_invocation(
     tool_inv: dict[str, Any], agent_state: Any | None = None
 ) -> Any:
-    # Executes a tool invocation dictionary.
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
@@ -642,7 +618,6 @@ async def execute_tool_invocation(
 
 
 def _check_error_result(result: Any) -> tuple[bool, Any]:
-    # Checks if the result indicates an error.
     is_error = False
     error_payload: Any = None
 
@@ -656,7 +631,6 @@ def _check_error_result(result: Any) -> tuple[bool, Any]:
 
 
 def extract_screenshot_from_result(result: Any) -> str | None:
-    # Extracts base64 screenshot data if present in the result dict.
     if not isinstance(result, dict):
         return None
     screenshot = result.get("screenshot")
@@ -666,7 +640,6 @@ def extract_screenshot_from_result(result: Any) -> str | None:
 
 
 def remove_screenshot_from_result(result: Any) -> Any:
-    # Removes or replaces screenshot data in the result dict.
     if not isinstance(result, dict):
         return result
     if "screenshot" not in result:
@@ -680,7 +653,6 @@ def remove_screenshot_from_result(result: Any) -> Any:
 def _format_tool_result(
     tool_name: str, result: Any
 ) -> tuple[str, list[dict[str, Any]]]:
-    # Formats the tool result into XML for the agent, extracting images.
     images: list[dict[str, Any]] = []
     result_for_llm: Any
 
@@ -739,7 +711,6 @@ def _format_tool_result(
 
 
 def _get_dedup_key(tool_inv: dict[str, Any]) -> str:
-    """Generate a unique key for deduplication based on tool name and args."""
     tool_name = tool_inv.get("toolName", "")
     args = tool_inv.get("args", {}).copy()
     # Remove IDs that are unique per call - they shouldn't affect dedup
@@ -751,7 +722,6 @@ def _get_dedup_key(tool_inv: dict[str, Any]) -> str:
 def _deduplicate_invocations(
     tool_invocations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Remove duplicate tool invocations, keeping the first occurrence."""
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
     duplicates = 0
@@ -776,7 +746,6 @@ async def process_tool_invocations(
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
 ) -> bool:
-    # Deduplicate invocations before processing
     tool_invocations = _deduplicate_invocations(tool_invocations)
     logger.info(f"Processing {len(tool_invocations)} tool invocation(s) in parallel.")
     logger.debug(f"Raw tool_invocations: {tool_invocations}")
@@ -859,9 +828,7 @@ async def process_tool_invocations(
 
         conversation_history.append(
             {
-                "id": tool_inv.get("args", {}).get(
-                    "tool_result_id"
-                ),  # Retrieve the ID we generated earlier
+                "id": tool_inv.get("args", {}).get("tool_result_id"),
                 "role": "tool_result",
                 "content": result_content_for_history,
                 "timestamp": tool_result_timestamp,

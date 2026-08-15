@@ -7,9 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 def load_external_tools():
-    """
-    Loads tool packages from paths specified in AGENT_TOOL_PATHS environment variable.
-    """
     paths_env = os.getenv("AGENT_TOOL_PATHS")
     if not paths_env:
         return
@@ -31,7 +28,6 @@ def load_external_tools():
             sys.path.insert(0, parent_dir)
             logger.debug(f"Added to sys.path: {parent_dir}")
 
-        # Find all subdirectories with __init__.py (packages)
         try:
             for entry in os.listdir(base_path):
                 pkg_dir = os.path.join(base_path, entry)

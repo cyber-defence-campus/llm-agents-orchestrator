@@ -1,19 +1,7 @@
 from typing import Any, Optional, Dict
-from pydantic import BaseModel, Field
 
 from agent_framework.tools import register_tool
 from .terminal_manager import get_terminal_manager
-
-
-class ShellCommandResult(BaseModel):
-    """Structured result of a shell command execution."""
-
-    stdout: str = ""
-    stderr: str = ""
-    exit_code: Optional[int] = None
-    command_executed: str
-    execution_status: str = "unknown"
-    error_details: Optional[str] = None
 
 
 @register_tool
@@ -42,7 +30,6 @@ async def run_shell_command(
     """
     tm = get_terminal_manager()
 
-    # Determine the default session ID
     default_session = "default"
     if agent_state and hasattr(agent_state, "agent_id"):
         default_session = agent_state.agent_id

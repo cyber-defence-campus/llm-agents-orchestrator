@@ -7,13 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 class LLMConfig(BaseModel):
-    """
-    Configuration for the Language Model (LLM).
-
-    This Pydantic model replaces the previous plain class to enable proper
-    serialization (`.model_dump()`) for the distributed architecture.
-    """
-
     model_name: str | None = None
     api_key: str | None = None
     api_base: str | None = None
@@ -73,7 +66,6 @@ class LLMConfig(BaseModel):
 
     @model_validator(mode="after")
     def complete_config(self) -> "LLMConfig":
-        """Sets default model_name and validates configuration after initialization."""
         api_key = os.getenv("DEEPSEEK_API_KEY")
         masked_key = (
             f"{api_key[:4]}...{api_key[-4:]}"

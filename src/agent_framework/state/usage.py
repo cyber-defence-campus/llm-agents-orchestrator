@@ -53,25 +53,20 @@ def increment_usage_stats(
             pipe.hincrby(key, "cache_creation_tokens", cache_creation_tokens)
             track_context(key, input_tokens)
 
-        # Job Global
         inc(f"{usage_base_key}:global")
 
-        # Agent
         if agent_id:
             inc(f"{usage_base_key}:agents:{agent_id}")
 
-        # Model
         if model_name:
             inc(f"{usage_base_key}:models:{model_name}")
             pipe.sadd(f"{usage_base_key}:used_models", model_name)
 
-        # Global
         inc(global_usage_key)
         if model_name:
             inc(f"{global_usage_key}:models:{model_name}")
             pipe.sadd(f"{global_usage_key}:used_models", model_name)
 
-        # Daily
         inc(f"{date_usage_key}:global")
         if model_name:
             inc(f"{date_usage_key}:models:{model_name}")
@@ -94,7 +89,6 @@ def increment_usage_stats(
 
         pipe.execute()
 
-        # Publish update event
         channel = f"platform:job-updates:{job_id}"
         try:
             client.publish(
@@ -109,8 +103,6 @@ def increment_usage_stats(
 
 
 def get_usage_calls(client: redis.Redis, job_id: str) -> List[Dict[str, Any]]:
-    """The per-LLM-call usage timeline for a job (one record per call), in call
-    order. Returns [] if none recorded."""
     if not job_id or not client:
         return []
     try:
@@ -130,11 +122,9 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
     if not job_id or not client:
         return {}
 
-    # Base Job Stats
     base = f"platform:usage:job:{job_id}:global"
     stats = _fetch_hash(client, base)
 
-    # Model Stats
     models_stats = {}
     try:
         models = client.smembers(f"platform:usage:job:{job_id}:used_models")
@@ -145,23 +135,18 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Agents Stats with name and model from agent state
     agents_stats = {}
     try:
-        # Find all agents for this job
         job_agents_key = f"platform:job_agents:{job_id}"
         agent_ids = client.smembers(job_agents_key)
 
         usage_base_key = f"platform:usage:job:{job_id}"
 
-        # Get agent graph data for name and model
         agent_graph_data = {}
         try:
             for aid in agent_ids:
                 node_raw = client.hget("agent_graph:nodes", aid)
                 if node_raw:
-                    import json
-
                     node_data = json.loads(node_raw)
                     agent_graph_data[aid] = {
                         "name": node_data.get("name", aid),
@@ -174,7 +159,6 @@ def get_usage_stats(client: redis.Redis, job_id: str) -> Dict[str, Any]:
             agent_key = f"{usage_base_key}:agents:{agent_id}"
             agent_data = _fetch_hash(client, agent_key)
             if agent_data:
-                # Get agent name and model from agent graph
                 graph_info = agent_graph_data.get(agent_id, {})
                 agent_name = graph_info.get("name", agent_id)
                 agent_model = graph_info.get("model", "Unknown")
@@ -229,7 +213,7 @@ def get_usage_history(client: redis.Redis, days: int = 30) -> List[Dict[str, Any
         key = f"platform:usage:date:{date_str}:global"
 
         stats = _fetch_hash(client, key)
-        if stats:  # Only add if there is data
+        if stats:
             stats["date"] = date_str
             history.append(stats)
 

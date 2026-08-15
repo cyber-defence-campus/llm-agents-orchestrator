@@ -1,10 +1,3 @@
-"""
-Agent Service - Handles agent creation and lifecycle management.
-
-This is the core service for the standalone orchestrator, providing
-agent creation without dependency on external APIs.
-"""
-
 import logging
 import os
 import uuid
@@ -19,7 +12,6 @@ logger = logging.getLogger("agent_framework.services.agent_service")
 
 
 def _resolve_api_key(model_name: str) -> str | None:
-    """Resolves API key based on model name from environment."""
     if not model_name:
         return None
     model_lower = model_name.lower()
@@ -35,10 +27,6 @@ def _resolve_api_key(model_name: str) -> str | None:
 
 
 def get_agent_hierarchy(job_id: str | None = None) -> list[dict[str, Any]]:
-    """
-    Builds the agent hierarchy tree from Redis state.
-    Returns a list of root agent nodes with nested children.
-    """
     if job_id:
         agent_nodes = redis_manager.get_agent_nodes_by_job_id(job_id)
     else:
@@ -49,7 +37,6 @@ def get_agent_hierarchy(job_id: str | None = None) -> list[dict[str, Any]]:
 
     edges = redis_manager.get_all_edges()
 
-    # Build parent-child relationships
     children_map: dict[str, list[str]] = {}
     child_ids = set()
 
@@ -77,7 +64,6 @@ def get_agent_hierarchy(job_id: str | None = None) -> list[dict[str, Any]]:
 
         return node
 
-    # Find root nodes (nodes that are not children of anyone)
     root_nodes = []
     for agent_id in agent_nodes:
         if agent_id not in child_ids:
@@ -89,7 +75,6 @@ def get_agent_hierarchy(job_id: str | None = None) -> list[dict[str, Any]]:
 
 
 def format_agent_hierarchy(agents: list[dict], level: int = 0) -> str:
-    """Formats agent hierarchy tree as readable string."""
     result = ""
     for agent in agents:
         indent = "  " * level
@@ -112,33 +97,21 @@ def create_agent_config(
     api_key: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[dict[str, Any], AgentContext]:
-    """
-    Creates agent configuration and state for a new agent.
-
-    Returns:
-        Tuple of (agent_config dict, AgentContext object)
-    """
-    # Build full task with context
     full_task = task
     if context:
         full_task = f"{context}\n\nYour assigned task is as follows:\n{task}"
 
-    # Handle prompt modules
     module_list = list(prompt_modules) if prompt_modules else []
 
-    # Ensure sub-agents get coordination module
     if parent_id is not None:
         if "coordination/sub_agent" not in module_list:
             module_list.append("coordination/sub_agent")
-        # Remove root_agent if accidentally included
         if "coordination/root_agent" in module_list:
             module_list.remove("coordination/root_agent")
     else:
-        # Root agent
         if "coordination/root_agent" not in module_list and not module_list:
             module_list.append("coordination/root_agent")
 
-    # Create agent state
     agent_state = AgentContext(
         task=full_task,
         original_task=task,
@@ -148,17 +121,13 @@ def create_agent_config(
     )
     agent_id = agent_state.agent_id
 
-    # Resolve model
     platform_llm_name = model or os.getenv(
         "AGENT_MODEL", "gemini/gemini-3-flash-preview"
     )
-    # Use provided api_key (inherited from parent) or resolve from environment
     effective_api_key = api_key or _resolve_api_key(platform_llm_name)
 
-    # Get agent hierarchy for context
     agent_hierarchy = get_agent_hierarchy(job_id)
 
-    # Build LLM config
     llm_config = LLMConfig(
         model_name=platform_llm_name,
         prompt_modules=module_list,
@@ -170,7 +139,6 @@ def create_agent_config(
     if reasoning_effort:
         display_model = f"{platform_llm_name} ({reasoning_effort})"
 
-    # Create node data for Redis
     node_data = {
         "id": agent_id,
         "name": name,
@@ -180,7 +148,6 @@ def create_agent_config(
         "model": display_model,
     }
 
-    # Full agent config for starting the agent
     agent_config = {
         "llm_config": llm_config.model_dump(),
         "state": agent_state.model_dump(mode="json"),
@@ -206,25 +173,20 @@ def register_agent_in_graph(
     node_data: dict[str, Any],
     job_id: str | None = None,
 ) -> None:
-    """Registers a new agent in the Redis state graph."""
     agent_id = agent_state.agent_id
     parent_id = agent_state.parent_id
 
-    # Store agent node
     redis_manager.add_agent_node(node_data)
 
-    # Set as root if no parent
     if parent_id is None:
         redis_manager.set_root_agent_id(agent_id)
     else:
-        # Add delegation edge from parent to child
         redis_manager.add_edge(
             from_id=parent_id,
             to_id=agent_id,
             edge_type="delegation",
         )
 
-    # Publish graph update event
     if job_id:
         redis_manager.publish_event(job_id, "graph_node_added", {"node": node_data})
 
@@ -237,7 +199,6 @@ def dispatch_agent_msg(
     sender: str = "user",
     job_id: str | None = None,
 ) -> dict[str, Any]:
-    """Sends a message to an agent's message queue."""
     agent_node = redis_manager.get_agent_node(target_agent_id)
     if not agent_node:
         return {"success": False, "error": f"Agent '{target_agent_id}' not found."}
@@ -253,7 +214,6 @@ def dispatch_agent_msg(
 
     redis_manager.add_message_to_queue(target_agent_id, message_data)
 
-    # Publish event
     if job_id:
         redis_manager.publish_event(
             job_id,

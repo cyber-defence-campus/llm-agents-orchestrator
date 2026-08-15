@@ -25,16 +25,10 @@ def mock_sandbox_client():
 async def test_run_shell_command_sandbox_integration(
     mock_agent_state, mock_sandbox_client
 ):
-    """
-    Verifies that 'run_shell_command' is correctly routed to the sandbox client
-    with the correct 'session_id' parameter.
-    """
-    # Setup environment for sandbox
     with patch.dict("os.environ", {"AGENT_SANDBOX_URL": "http://mock-sandbox"}), patch(
         "agent_framework.tools.executor.should_execute_in_sandbox",
         return_value=True,
     ), patch("agent_framework.tools.executor.is_sandbox_runtime", False):
-        # Mock successful execution
         mock_sandbox_client.execute_tool.return_value = {
             "stdout": "uid=0(root) gid=0(root)",
             "stderr": "",
@@ -43,20 +37,15 @@ async def test_run_shell_command_sandbox_integration(
             "execution_status": "success",
         }
 
-        # Execute the tool
         result = await execute_tool("run_shell_command", mock_agent_state, command="id")
 
-        # Verify the result matches our mock
         assert result["stdout"] == "uid=0(root) gid=0(root)"
         assert result["exit_code"] == 0
 
-        # CRITICAL: Verify the sandbox client was called with session_id
         mock_sandbox_client.execute_tool.assert_awaited_once()
         call_kwargs = mock_sandbox_client.execute_tool.call_args[1]
 
         assert call_kwargs["tool_name"] == "run_shell_command"
-        assert (
-            call_kwargs["session_id"] == "job-term-123"
-        )  # This ensures the fix is working
+        assert call_kwargs["session_id"] == "job-term-123"
         assert call_kwargs["agent_id"] == "test-agent-term"
         assert call_kwargs["kwargs"]["command"] == "id"

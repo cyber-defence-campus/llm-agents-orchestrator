@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import asyncio
-import json
 import os
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import httpx
 from rich.console import Console
@@ -13,11 +12,7 @@ from rich.table import Table
 from rich.tree import Tree
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
-from rich.live import Live
-from rich.layout import Layout
-from rich.markdown import Markdown
 
-# Configuration
 BASE_URL = os.getenv("AGENT_MANAGER_URL", "http://localhost:8083")
 console = Console()
 
@@ -105,9 +100,7 @@ async def view_graph(client: AgentClient):
         Prompt.ask("Press Enter to return")
         return
 
-    # Map by ID for easy lookup
     agent_map = {a["agent_id"]: a for a in agents}
-    # Find root agents
     roots = [
         a
         for a in agents
@@ -170,7 +163,6 @@ async def view_agent_details(client: AgentClient, agent_id: str):
             Prompt.ask("Press Enter to return")
             return
 
-        # Header Info
         status = details.get("status", "N/A")
         status_color = get_status_color(status)
         console.print(
@@ -180,12 +172,11 @@ async def view_agent_details(client: AgentClient, agent_id: str):
         console.print(f"Task: {details.get('task', 'N/A')}")
         console.print(Panel("", title="Messages", border_style="dim"))
 
-        # Messages
         messages = details.get("messages", [])
         if not messages:
             console.print("[dim]No messages yet.[/dim]")
         else:
-            for msg in messages[-10:]:  # Show last 10
+            for msg in messages[-10:]:
                 role = msg.get("role", "unknown")
                 color = (
                     "cyan"
