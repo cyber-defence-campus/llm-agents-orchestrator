@@ -53,8 +53,27 @@ class ToolRegistry:
         return list(self._registry.values())
 
     def generate_prompt_xml(
-        self, sandbox_active: bool = False, exclude: Optional[List[str]] = None
+        self,
+        sandbox_active: bool = False,
+        exclude: Optional[List[str]] = None,
+        only: Optional[List[str]] = None,
     ) -> str:
+        """Render the tool schemas an agent is offered.
+
+        `only` is an allowlist and takes precedence over everything else,
+        including `sandbox_active`. An agent whose contract is a fixed set of
+        actions cannot express that with `exclude`: the list has to name every
+        tool that must not appear, so a tool added later, or one that appears
+        because sandbox mode was switched on, silently joins the contract.
+        That happened — an agent meant to have typed capabilities and no shell
+        was handed `python_execute` when sandbox mode was enabled, and used it.
+        """
+        if only is not None:
+            wanted = set(only)
+            valid_tools = [t for t in self._registry.values() if t["name"] in wanted]
+            valid_tools.sort(key=lambda x: x["name"])
+            return "\n\n".join([t["schema_xml"] for t in valid_tools])
+
         valid_tools = [
             t for t in self._registry.values() if (not t["sandbox"]) or sandbox_active
         ]
@@ -127,10 +146,12 @@ def should_execute_in_sandbox(name: str) -> bool:
     return t["sandbox"] if t else True
 
 
-def get_tools_prompt(exclude: Optional[List[str]] = None) -> str:
+def get_tools_prompt(exclude: Optional[List[str]] = None,
+                     only: Optional[List[str]] = None) -> str:
     # Use env var as proxy for sandbox availability
     active = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
-    return ToolRegistry.instance().generate_prompt_xml(active, exclude=exclude)
+    return ToolRegistry.instance().generate_prompt_xml(
+        active, exclude=exclude, only=only)
 
 
 def clear_registry():
