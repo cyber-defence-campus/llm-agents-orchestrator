@@ -21,7 +21,10 @@ CRITICAL RULES:
 4. For array or object parameters, you MUST use strict JSON format (double quotes `"`), NOT Python dict format (single quotes `'`).
 5. Explain your reasoning before your tool for reasoning and planning.
 
-{{ get_tools_prompt() }}
+{# A caller may narrow the tool list to what its environment can actually
+   carry out. Unset means every registered tool, which is what every existing
+   caller gets. #}
+{{ get_tools_prompt(only=capabilities) if capabilities is defined and capabilities else get_tools_prompt() }}
 </tool_usage>
 
 {% if loaded_module_names %}
