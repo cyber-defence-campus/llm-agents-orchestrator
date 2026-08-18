@@ -93,12 +93,22 @@ def create_agent_config(
     parent_id: str | None = None,
     prompt_modules: list[str] | None = None,
     model: str | None = None,
-    context: str | None = None,
+    context: dict[str, Any] | str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[dict[str, Any], AgentContext]:
+    # A mapping is template context; a string is prose to prepend. The API has
+    # declared `context: dict` all along while this treated it as a string, so
+    # a caller's dict was f-stringed into the task and `context_data` -- which
+    # the field itself aliases to `context`, and which the system prompt renders
+    # from -- stayed empty. A campaign that told its agents which capabilities
+    # the range carries out was talking to nobody: the model read the names in
+    # its task prose, had no schema for any of them, and called them by guessing.
     full_task = task
-    if context:
+    context_data: dict[str, Any] = {}
+    if isinstance(context, dict):
+        context_data = dict(context)
+    elif context:
         full_task = f"{context}\n\nYour assigned task is as follows:\n{task}"
 
     module_list = list(prompt_modules) if prompt_modules else []
@@ -118,6 +128,7 @@ def create_agent_config(
         agent_name=name,
         parent_id=parent_id,
         sandbox_info={"job_id": job_id} if job_id else {},
+        context=context_data,
     )
     agent_id = agent_state.agent_id
 

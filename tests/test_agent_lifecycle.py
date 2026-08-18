@@ -47,6 +47,44 @@ class TestSimpleAgentCreation:
 
         assert mock_redis.add_agent_node.called
 
+    def test_a_mapping_context_reaches_the_prompt_not_the_task_prose(
+        self, test_client, mock_redis
+    ):
+        """`context` is declared a dict and must be usable as one.
+
+        It was typed `dict` on the request and `str` where it was consumed, so
+        a caller's mapping was f-stringed into the task and `context_data` --
+        which the field itself aliases to `context`, and which the system
+        prompt renders its tool schemas from -- stayed empty. A campaign that
+        told each agent which capabilities its range carries out was talking to
+        nobody: the model read the names in its task prose, had no schema for
+        any of them, and called them by guessing the argument shape.
+        """
+        from agent_framework.services import agent_service
+
+        mock_redis.get_paginated_agent_nodes.return_value = ([], 0)
+        mock_redis.get_all_agent_nodes.return_value = {}
+        mock_redis.get_agent_nodes_by_job_id.return_value = {}
+        mock_redis.get_all_edges.return_value = []
+
+        _, state = agent_service.create_agent_config(
+            name="WithCapabilities", task="Reach the domain controller.",
+            context={"capabilities": ["enumerate_hosts", "read_file"]},
+        )
+        assert state.context_data == {
+            "capabilities": ["enumerate_hosts", "read_file"]
+        }
+        assert "capabilities" not in state.task, (
+            "a mapping is template context, not prose to paste into the task")
+
+        # a string still prepends, because callers depend on that
+        _, prose = agent_service.create_agent_config(
+            name="WithPreamble", task="Reach the domain controller.",
+            context="You are on an internal segment.",
+        )
+        assert prose.task.startswith("You are on an internal segment.")
+        assert prose.context_data == {}
+
 
 class TestAgentStatus:
     def test_get_status_not_found_not_in_redis(self, test_client, mock_redis):
