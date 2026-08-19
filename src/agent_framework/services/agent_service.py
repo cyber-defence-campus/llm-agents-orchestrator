@@ -11,9 +11,44 @@ from agent_framework.state import redis_manager
 logger = logging.getLogger("agent_framework.services.agent_service")
 
 
+# Whose key a model needs, by the prefix that decides where the request goes.
+BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "azure": ("AZURE_API_KEY",),
+    "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "vertex_ai": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+}
+
+
 def _resolve_api_key(model_name: str) -> str | None:
+    """The key for the service this model is actually routed through.
+
+    The prefix is the routing. Reading the whole name for substrings instead
+    sent `openrouter/deepseek/deepseek-v4-flash` the DeepSeek key, because the
+    vendor's name appears in a model OpenRouter serves -- and the provider
+    answered `AuthenticationError`. Every sub-agent failed on its first turn,
+    parked itself in the wait loop, and reported `running` with nothing behind
+    it: a whole deployment that looked alive and never took an action.
+
+    A prefixed name resolves only against its own provider. Handing back a
+    different service's key is worse than handing back none, because none
+    falls through to whatever the environment already configured.
+    """
     if not model_name:
         return None
+
+    provider = model_name.partition("/")[0].lower()
+    if provider in BY_PROVIDER:
+        for variable in BY_PROVIDER[provider]:
+            if os.getenv(variable):
+                return os.getenv(variable)
+        return None
+
+    # Unprefixed names carry no routing, so the vendor has to be read out of
+    # the name itself. This is the old behaviour, kept for those alone.
     model_lower = model_name.lower()
     if "openai" in model_lower or "gpt" in model_lower:
         return os.getenv("OPENAI_API_KEY")
