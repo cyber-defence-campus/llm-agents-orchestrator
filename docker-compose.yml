@@ -35,7 +35,7 @@ services:
       - "${SANDBOX_PORT:-8000}:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./logs:/app/logs
+      - agent_logs:/app/logs
     environment:
       - AGENT_SANDBOX_IMAGE=sandbox:local
       - AGENT_NETWORK_NAME=orchestrator_net
@@ -59,7 +59,9 @@ services:
     ports:
       - "${AGENT_MANAGER_PORT:-8083}:8083"
     volumes:
-      - ./logs:/app/logs
+      # Named volume instead of ./logs bind mount: containers run as root and
+      # would otherwise litter the source tree with root-owned log files.
+      - agent_logs:/app/logs
     environment:
       - PYTHONPATH=/app:/app/src
       - REDIS_HOST=redis
@@ -82,6 +84,8 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  agent_logs:
     driver: local
 
 networks:
