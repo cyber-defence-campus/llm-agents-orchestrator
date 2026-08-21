@@ -14,6 +14,7 @@ from .registry import (
     get_tool_by_name,
     get_tool_names,
     get_tools_prompt,
+    get_tools_schema,
     needs_agent_state,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
     "get_tool_by_name",
     "get_tool_names",
     "get_tools_prompt",
+    "get_tools_schema",
     "needs_agent_state",
     "process_tool_invocations",
     "register_tool",

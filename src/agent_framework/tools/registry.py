@@ -7,6 +7,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 logger = logging.getLogger("agent_framework.tools.registry")
 
+# tool_def.xml is not well-formed XML -- `<parameter=name ...>` puts the name in
+# the tag itself -- so it is read with regexes rather than an XML parser.
+PARAM_RE = re.compile(
+    r'<parameter=([\w.\-]+)\s+type="([^"]+)"\s+required="(true|false)"\s*>(.*?)</parameter>',
+    re.DOTALL,
+)
+DESCRIPTION_RE = re.compile(r"<description>(.*?)</description>", re.DOTALL)
+NOTE_RE = re.compile(r"<note>(.*?)</note>", re.DOTALL)
+
 
 ACTION_DEF_RE = re.compile(r"<action_definition>.*?</action_definition>", re.DOTALL)
 ACTION_NAME_RE = re.compile(r"<name>\s*([\w.\-]+)\s*</name>")
@@ -21,12 +30,87 @@ def _action_definition_for(content: str, tool_name: str) -> Optional[str]:
     return None
 
 
+def _json_type(declared: str) -> str:
+    t = declared.strip().lower()
+    if t.startswith("bool"):
+        return "boolean"
+    if t in ("integer", "int"):
+        return "integer"
+    if t in ("number", "float"):
+        return "number"
+    if t.startswith("list") or t.startswith("array"):
+        return "array"
+    if t.startswith("dict") or t.startswith("object") or t.startswith("mapping"):
+        return "object"
+    return "string"
+
+
+def _schema_from_signature(fn: Callable) -> Dict[str, Any]:
+    """Fallback for a tool with no tool_def.xml entry."""
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+    for name, param in inspect.signature(fn).parameters.items():
+        if name == "agent_state" or param.kind in (
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            continue
+        annotation = param.annotation
+        declared = getattr(annotation, "__name__", str(annotation))
+        properties[name] = {"type": _json_type(declared)}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+    return {"type": "object", "properties": properties, "required": required}
+
+
+def _build_json_schema(name: str, schema_xml: str, fn: Callable) -> Dict[str, Any]:
+    """An OpenAI-style function schema for one registered tool."""
+    head = schema_xml.split("<spec>")[0]
+    head_description = DESCRIPTION_RE.search(head)
+    description = head_description.group(1).strip() if head_description else ""
+
+    notes = [n.strip() for n in NOTE_RE.findall(schema_xml)]
+    if notes:
+        description = (description + "\n\n" + "\n".join(f"- {n}" for n in notes)).strip()
+
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+    for match in PARAM_RE.finditer(schema_xml):
+        param_name, declared, is_required, body = match.groups()
+        if param_name == "agent_state":
+            continue
+        param_description = DESCRIPTION_RE.search(body)
+        prop: Dict[str, Any] = {"type": _json_type(declared)}
+        if prop["type"] == "array":
+            prop["items"] = {}
+        if param_description:
+            prop["description"] = param_description.group(1).strip()
+        properties[param_name] = prop
+        if is_required == "true":
+            required.append(param_name)
+
+    parameters = (
+        {"type": "object", "properties": properties, "required": required}
+        if properties
+        else _schema_from_signature(fn)
+    )
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description or f"Invoke the {name} tool.",
+            "parameters": parameters,
+        },
+    }
+
+
 class ToolDef(TypedDict):
     name: str
     fn: Callable[..., Any]
     sandbox: bool
     needs_context: bool
     schema_xml: str
+    schema_json: Dict[str, Any]
 
 
 class ToolRegistry:
@@ -57,6 +141,7 @@ class ToolRegistry:
             "sandbox": sandbox,
             "needs_context": "agent_state" in sig.parameters,
             "schema_xml": schema,
+            "schema_json": _build_json_schema(name, schema, fn),
         }
         return fn
 
@@ -66,13 +151,13 @@ class ToolRegistry:
     def list_tools(self) -> List[ToolDef]:
         return list(self._registry.values())
 
-    def generate_prompt_xml(
+    def select_tools(
         self,
         sandbox_active: bool = False,
         exclude: Optional[List[str]] = None,
         only: Optional[List[str]] = None,
-    ) -> str:
-        """Render the tool schemas an agent is offered.
+    ) -> List[ToolDef]:
+        """The tools an agent is offered, in a stable order.
 
         `only` is an allowlist and takes precedence over everything else,
         including `sandbox_active`. An agent whose contract is a fixed set of
@@ -85,19 +170,35 @@ class ToolRegistry:
         if only is not None:
             wanted = set(only)
             valid_tools = [t for t in self._registry.values() if t["name"] in wanted]
-            valid_tools.sort(key=lambda x: x["name"])
-            return "\n\n".join([t["schema_xml"] for t in valid_tools])
-
-        valid_tools = [
-            t for t in self._registry.values() if (not t["sandbox"]) or sandbox_active
-        ]
-
-        if exclude:
-            valid_tools = [t for t in valid_tools if t["name"] not in exclude]
+        else:
+            valid_tools = [
+                t
+                for t in self._registry.values()
+                if (not t["sandbox"]) or sandbox_active
+            ]
+            if exclude:
+                valid_tools = [t for t in valid_tools if t["name"] not in exclude]
 
         valid_tools.sort(key=lambda x: x["name"])
+        return valid_tools
 
-        return "\n\n".join([t["schema_xml"] for t in valid_tools])
+    def generate_prompt_xml(
+        self,
+        sandbox_active: bool = False,
+        exclude: Optional[List[str]] = None,
+        only: Optional[List[str]] = None,
+    ) -> str:
+        tools = self.select_tools(sandbox_active, exclude=exclude, only=only)
+        return "\n\n".join([t["schema_xml"] for t in tools])
+
+    def generate_tool_schemas(
+        self,
+        sandbox_active: bool = False,
+        exclude: Optional[List[str]] = None,
+        only: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        tools = self.select_tools(sandbox_active, exclude=exclude, only=only)
+        return [t["schema_json"] for t in tools]
 
     def _load_schema(self, fn: Callable) -> Tuple[str, str]:
         try:
@@ -174,6 +275,13 @@ def get_tools_prompt(exclude: Optional[List[str]] = None,
     # Use env var as proxy for sandbox availability
     active = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
     return ToolRegistry.instance().generate_prompt_xml(
+        active, exclude=exclude, only=only)
+
+
+def get_tools_schema(exclude: Optional[List[str]] = None,
+                     only: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    active = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
+    return ToolRegistry.instance().generate_tool_schemas(
         active, exclude=exclude, only=only)
 
 

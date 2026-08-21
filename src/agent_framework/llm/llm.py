@@ -78,7 +78,7 @@ from agent_framework.llm.config import LLMConfig
 from agent_framework.llm.request_queue import get_shared_queue
 from agent_framework.llm.utils import parse_tool_invocations
 from agent_framework.prompts import load_prompt_modules, get_all_module_names
-from agent_framework.tools import get_tools_prompt
+from agent_framework.tools import get_tools_prompt, get_tools_schema
 from agent_framework.state import redis_manager as state_manager
 
 logger = logging.getLogger("agent_framework.llm")
@@ -146,6 +146,41 @@ def openrouter_routing() -> dict[str, Any] | None:
     return {"order": providers, "allow_fallbacks": allow_fallbacks}
 
 
+def _native_tool_invocations(response: ModelResponse) -> list[dict[str, Any]]:
+    """Structured tool calls off the wire, in the internal invocation shape.
+
+    Arguments arrive as a JSON string per the OpenAI schema. A model can still
+    emit one that does not parse, so a bad payload drops that call rather than
+    taking down the whole response.
+    """
+    try:
+        raw_calls = response.choices[0].message.tool_calls or []
+    except (AttributeError, IndexError):
+        return []
+
+    invocations = []
+    for call in raw_calls:
+        name = getattr(getattr(call, "function", None), "name", None)
+        if not name:
+            continue
+        raw_args = getattr(call.function, "arguments", "") or "{}"
+        if isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            try:
+                args = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"Unparseable arguments for tool '{name}': {raw_args!r}")
+                continue
+        if not isinstance(args, dict):
+            logger.warning(f"Non-object arguments for tool '{name}': {args!r}")
+            continue
+        invocations.append(
+            {"toolName": name, "args": args, "id": getattr(call, "id", None)}
+        )
+    return invocations
+
+
 class LLM:
     def __init__(
         self,
@@ -162,10 +197,12 @@ class LLM:
         self.agent_name = agent_name
         self.job_id = None
         self.agent_id = None
+        self.capabilities = None
         if agent_state and agent_state.sandbox_info:
             self.job_id = agent_state.sandbox_info.get("job_id")
         if agent_state:
             self.agent_id = agent_state.agent_id
+            self.capabilities = (agent_state.context_data or {}).get("capabilities")
 
         self._total_stats = RequestStats()
         self._last_request_stats = RequestStats()
@@ -229,6 +266,7 @@ class LLM:
                 )
                 render_params = {
                     "get_tools_prompt": get_tools_prompt,
+                    "native_tools": self._native_tools_enabled(),
                     "loaded_module_names": self.config.prompt_modules or [],
                     "available_prompt_modules": sorted(list(get_all_module_names())),
                     "agent_hierarchy": agent_hierarchy,
@@ -436,20 +474,28 @@ class LLM:
                     if provider_fields:
                         reasoning_content = provider_fields.get("reasoning_content")
 
-            if "<function=" in content and not content.rstrip().endswith("</function>"):
-                last_func_start = content.rfind("<function=")
-                if content.find("</function>", last_func_start) == -1:
-                    content = content + "\n</function>"
+            tool_invocations = _native_tool_invocations(response)
 
-            tool_invocations = parse_tool_invocations(content) or []
+            # The XML protocol stays as a fallback: a model offered native tools
+            # may still answer in prose with a hand-written tag, and that is a
+            # real call the agent would otherwise lose.
+            if not tool_invocations:
+                if "<function=" in content and not content.rstrip().endswith(
+                    "</function>"
+                ):
+                    last_func_start = content.rfind("<function=")
+                    if content.find("</function>", last_func_start) == -1:
+                        content = content + "\n</function>"
 
-            if reasoning_content and isinstance(reasoning_content, str):
-                reasoning_tools = parse_tool_invocations(reasoning_content)
-                if reasoning_tools:
-                    logger.info(
-                        f"Extracted {len(reasoning_tools)} tool(s) from REASONING_CONTENT for {self.agent_name}"
-                    )
-                    tool_invocations.extend(reasoning_tools)
+                tool_invocations = parse_tool_invocations(content) or []
+
+                if reasoning_content and isinstance(reasoning_content, str):
+                    reasoning_tools = parse_tool_invocations(reasoning_content)
+                    if reasoning_tools:
+                        logger.info(
+                            f"Extracted {len(reasoning_tools)} tool(s) from REASONING_CONTENT for {self.agent_name}"
+                        )
+                        tool_invocations.extend(reasoning_tools)
 
             if not tool_invocations:
                 tool_invocations = None
@@ -521,6 +567,31 @@ class LLM:
             "total": self._total_stats.to_dict(),
             "last_request": self._last_request_stats.to_dict(),
         }
+
+    def _native_tools_enabled(self) -> bool:
+        """Whether to send tool schemas instead of the XML protocol.
+
+        AGENT_NATIVE_TOOLS: "false" forces XML back on, "true" (the default)
+        forces native on. litellm.supports_function_calling is consulted only
+        under "auto", because its model map lags real support -- it answers
+        False for deepseek-v4-flash, which returns native tool_calls when
+        asked. Defaulting to its answer would have silently kept every agent
+        on XML forever.
+        """
+        setting = os.getenv("AGENT_NATIVE_TOOLS", "true").lower()
+        if setting in ("0", "false", "no"):
+            return False
+        if setting != "auto":
+            return True
+        try:
+            return bool(litellm.supports_function_calling(self.config.model_name))
+        except Exception:
+            return False
+
+    def native_tools(self) -> list[dict[str, Any]] | None:
+        if not self._native_tools_enabled():
+            return None
+        return get_tools_schema(only=self.capabilities) or None
 
     def _should_include_stop_param(self) -> bool:
         if not self.config.model_name:
@@ -630,7 +701,13 @@ class LLM:
         )
         completion_args.update(connection_args)
 
-        if self._should_include_stop_param():
+        tools = self.native_tools()
+        if tools:
+            completion_args["tools"] = tools
+            completion_args["tool_choice"] = "auto"
+        elif self._should_include_stop_param():
+            # Only meaningful for the XML protocol, and actively harmful with
+            # native tools: it truncates on a tag the model no longer emits.
             completion_args["stop"] = ["</function>"]
 
         effort = self.config.reasoning_effort

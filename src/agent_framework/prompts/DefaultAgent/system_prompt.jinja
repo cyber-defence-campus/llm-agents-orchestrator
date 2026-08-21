@@ -9,6 +9,14 @@ You follow all instructions and rules provided to you exactly as written in the 
 </communication_rules>
 
 <tool_usage>
+{% if native_tools %}
+Call tools through the tool-calling interface. The tools you have are supplied
+with this request; never invent a tool name that is not among them.
+
+CRITICAL RULES:
+1. One tool call per message
+2. Explain your reasoning before the call, for reasoning and planning.
+{% else %}
 Tool calls use XML format:
 <function=tool_name>
 <parameter=param_name>value</parameter>
@@ -25,6 +33,7 @@ CRITICAL RULES:
    carry out. Unset means every registered tool, which is what every existing
    caller gets. #}
 {{ get_tools_prompt(only=capabilities) if capabilities is defined and capabilities else get_tools_prompt() }}
+{% endif %}
 </tool_usage>
 
 {% if loaded_module_names %}
