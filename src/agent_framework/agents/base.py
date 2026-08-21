@@ -209,7 +209,11 @@ class BaseAgent:
         tool_calls = response.tool_invocations
         reasoning_content = response.reasoning_content
 
-        if llm_content and llm_content.strip() and llm_content.strip() != "\n":
+        had_content = bool(
+            llm_content and llm_content.strip() and llm_content.strip() != "\n"
+        )
+
+        if had_content:
             new_msg = self.context.append_message("assistant", llm_content)
             self._emit_message_event(new_msg)
         elif reasoning_content:
@@ -230,18 +234,18 @@ class BaseAgent:
         if tool_calls:
             return await self._dispatch_tools(tool_calls)
 
-        if not llm_content.strip():
-            self.context.consecutive_empty_responses += 1
-            if self.context.consecutive_empty_responses >= 5:
-                raise RuntimeError("Agent stuck in empty response loop.")
-            self.context.append_message(
-                "user", "System: Received empty response. Please proceed."
-            )
-            return False
-
-        self.context.consecutive_empty_responses = 0
-
-        self.context.set_waiting()
+        # The only legitimate ways into waiting_for_input are the enter_wait_mode
+        # tool call and a tool result signaling agent_should_wait -- both handled
+        # above via tool_calls. Any other turn without one must retry.
+        self.context.consecutive_empty_responses += 1
+        if self.context.consecutive_empty_responses >= 5:
+            raise RuntimeError("Agent stuck in empty response loop.")
+        self.context.append_message(
+            "user",
+            "System: No tool call was recognized. The only accepted format is:\n"
+            "<function=tool_name>\n<parameter=param_name>value</parameter>\n</function>\n"
+            "Call a tool in that exact format to continue, or enter_wait_mode if you are waiting on something.",
+        )
         return False
 
     async def _dispatch_tools(self, tool_list: List[Dict[str, Any]]) -> bool:
