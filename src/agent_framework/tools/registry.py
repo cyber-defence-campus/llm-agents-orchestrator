@@ -1,10 +1,24 @@
 import logging
 import os
 import inspect
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 logger = logging.getLogger("agent_framework.tools.registry")
+
+
+ACTION_DEF_RE = re.compile(r"<action_definition>.*?</action_definition>", re.DOTALL)
+ACTION_NAME_RE = re.compile(r"<name>\s*([\w.\-]+)\s*</name>")
+
+
+def _action_definition_for(content: str, tool_name: str) -> Optional[str]:
+    for match in ACTION_DEF_RE.finditer(content):
+        block = match.group(0)
+        declared = ACTION_NAME_RE.search(block)
+        if declared and declared.group(1) == tool_name:
+            return block
+    return None
 
 
 class ToolDef(TypedDict):
@@ -102,6 +116,15 @@ class ToolRegistry:
 
                     if "<tool" in content and content.count("<tool") == 1:
                         return content.strip(), "Loaded"
+
+                    # <action_definition><name>x</name> is the other spelling on
+                    # disk. Unhandled, it fell through to the stub below, and
+                    # run_shell_command -- the most used tool there is -- was
+                    # advertised to every model with no parameters and no
+                    # description at all.
+                    block = _action_definition_for(content, fn.__name__)
+                    if block:
+                        return block, "Loaded"
 
             return (
                 f'<tool name="{fn.__name__}"><description>Auto-generated</description></tool>',
