@@ -30,7 +30,41 @@ is_sandbox_runtime = os.getenv("AGENT_IS_SANDBOX_RUNTIME", "false").lower() == "
 logger = logging.getLogger("agent_framework.tools")
 
 
+# Clamped here rather than only in run_shell_command, because a sandboxed tool
+# runs inside the sandbox image, which carries its own baked copy of the tool
+# and never sees a fix made in this tree. This is the one choke point every
+# execution path passes through.
+MAX_EXEC_TIMEOUT = 900.0
+
+
 async def execute_tool(
+    tool_name: str, agent_state: Any | None = None, **kwargs: Any
+) -> Any:
+    """Executes a tool, capping any oversized exec_timeout first."""
+    requested = kwargs.get("exec_timeout")
+    capped = None
+    try:
+        if requested is not None and float(requested) > MAX_EXEC_TIMEOUT:
+            capped = float(requested)
+            kwargs["exec_timeout"] = MAX_EXEC_TIMEOUT
+    except (TypeError, ValueError):
+        pass
+
+    result = await _dispatch_tool(tool_name, agent_state, **kwargs)
+
+    if capped is not None:
+        logger.warning(
+            f"exec_timeout {capped} capped to {MAX_EXEC_TIMEOUT}s for '{tool_name}'"
+        )
+        if isinstance(result, dict):
+            result["timeout_note"] = (
+                f"exec_timeout {capped:g} exceeds the {MAX_EXEC_TIMEOUT:g}s maximum "
+                f"and was capped. It is measured in SECONDS, not milliseconds."
+            )
+    return result
+
+
+async def _dispatch_tool(
     tool_name: str, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
     """
