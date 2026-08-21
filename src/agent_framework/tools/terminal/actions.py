@@ -3,6 +3,12 @@ from typing import Any, Optional, Dict
 from agent_framework.tools import register_tool
 from .terminal_manager import get_terminal_manager
 
+# Unbounded, one wrong number parks an agent for hours and reads exactly like a
+# hang: a model that took the unit for milliseconds asked for 15000 and would
+# have blocked for four hours on a comment. A command needing longer than this
+# belongs in its own session, which is what `status: running` invites.
+MAX_EXEC_TIMEOUT = 900.0
+
 
 @register_tool
 async def run_shell_command(
@@ -36,14 +42,23 @@ async def run_shell_command(
 
     target_session = session_id or terminal_id or default_session
 
+    capped = exec_timeout
+    if exec_timeout is not None and exec_timeout > MAX_EXEC_TIMEOUT:
+        capped = MAX_EXEC_TIMEOUT
+
     try:
         result = await tm.execute_command(
             command=command,
             is_input=require_input,
-            timeout=exec_timeout,
+            timeout=capped,
             terminal_id=target_session,
             no_enter=suppress_newline,
         )
+        if capped != exec_timeout and isinstance(result, dict):
+            result["timeout_note"] = (
+                f"exec_timeout {exec_timeout} exceeds the {MAX_EXEC_TIMEOUT}s "
+                f"maximum and was capped. It is measured in SECONDS."
+            )
         return result
 
     except Exception as ex:

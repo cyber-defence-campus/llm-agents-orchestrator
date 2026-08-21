@@ -10,7 +10,7 @@
         <description>Set to true when sending input to a process that is already running in the terminal (e.g., responding to a password prompt, or sending data to an interactive program). When false (default), the command starts a new execution. If the session is busy with a running command and this is false, you will get an error.</description>
       </parameter>
       <parameter=exec_timeout type="number" required="false">
-        <description>Maximum seconds to wait for command completion. If you expect a long output, set this to a higher value. If a session is busy, you can 'join' it by sending an empty string or comment (starting with #) as the command.</description>
+        <description>Maximum SECONDS (not milliseconds) to wait for command completion. Typical values are 15-300; the maximum accepted is 900 and anything larger is capped. If you expect a long output, set this to a higher value. If a session is busy, you can 'join' it by sending an empty string or comment (starting with #) as the command.</description>
       </parameter>
       <parameter=session_id type="string" required="false">
         <description>Unique identifier for the terminal session. Use different session_ids to run commands in parallel! For example, use "scan1" for a long-running nmap scan, "main" for quick commands, and "exploit" for exploitation. Each session_id creates a completely isolated shell. Default: your agent ID.</description>
