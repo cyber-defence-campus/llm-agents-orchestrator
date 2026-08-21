@@ -6,7 +6,25 @@ TOOL_CALL_PATTERN = re.compile(
     r"<function=([^>]+)>\n?(.*?)</function(?:=[^>]+)?>", re.DOTALL
 )
 PARAM_PATTERN = re.compile(
-    r"<parameter(?:=| name=[\"'])([^>\"']+)[\"']?>(.*?)</parameter>", re.DOTALL
+    r"<parameter(?:=|\s+name=)[\"']?([\w.\-]+)[\"']?>(.*?)</parameter>", re.DOTALL
+)
+# The dialect PARAM_PATTERN cannot reach at all: no `=` or `name=` on the tag,
+# key and value both inside the body as `key=value`. This was the single most
+# common malformed form in practice -- an agent that reached for it lost every
+# parameter on the call, ran tools with empty args, and read the resulting
+# error as a reason to retry the same malformed tag rather than as a format
+# problem, which is what turned one bad guess into an unproductive loop.
+BARE_PARAM_PATTERN = re.compile(
+    r"<parameter>\s*([A-Za-z_][\w.\-]*)=(.*?)</parameter>", re.DOTALL
+)
+# A third dialect, rarer but distinct from both above: the opening tag never
+# closes with `>` at all -- `name=`, the value, and the closing `</parameter>`
+# run on with nothing to mark where the attribute ends. PARAM_PATTERN's key
+# capture excludes only `>`, `"` and `'`, so on this input it runs past the
+# intended value and consumes the literal text `</parameter>` looking for one
+# that was never going to follow, and the tag matches nothing.
+UNCLOSED_PARAM_PATTERN = re.compile(
+    r"<parameter\s+name=([A-Za-z_][\w.\-]*)=(.*?)</parameter>", re.DOTALL
 )
 
 
@@ -23,6 +41,11 @@ def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
             key = param.group(1).strip()
             val = html.unescape(param.group(2).strip())
             args[key] = val
+        for pattern in (BARE_PARAM_PATTERN, UNCLOSED_PARAM_PATTERN):
+            for param in pattern.finditer(body):
+                key = param.group(1).strip()
+                if key not in args:
+                    args[key] = html.unescape(param.group(2).strip())
 
         invocations.append({"toolName": tool_name, "args": args})
 
