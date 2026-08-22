@@ -87,3 +87,39 @@ class TestNativeToolCalls(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDocstringSchemas(unittest.TestCase):
+    """A tool described only by its docstring still reaches the model
+    described. Ten ARENA capabilities had no tool_def.xml at all and were
+    advertised as "Auto-generated" with bare parameter names."""
+
+    def _schema(self, fn):
+        from agent_framework.tools.registry import _build_json_schema
+        return _build_json_schema(fn.__name__, "", fn)["function"]
+
+    def test_summary_and_arg_docs_are_used(self):
+        def enumerate_hosts(subnet: str = "", agent_state=None):
+            """List hosts visible from a network segment.
+
+            Args:
+                subnet: CIDR to enumerate. Defaults to the agent's own segment.
+            """
+        fn = self._schema(enumerate_hosts)
+        self.assertIn("List hosts visible", fn["description"])
+        self.assertNotIn("Auto-generated", fn["description"])
+        self.assertIn("CIDR to enumerate",
+                      fn["parameters"]["properties"]["subnet"]["description"])
+
+    def test_agent_state_is_never_offered(self):
+        def t(target: str, agent_state=None):
+            """Do a thing."""
+        self.assertNotIn("agent_state", self._schema(t)["parameters"]["properties"])
+
+    def test_undocumented_tool_still_yields_a_schema(self):
+        def bare(x: int):
+            pass
+        fn = self._schema(bare)
+        self.assertTrue(fn["description"])
+        self.assertEqual(fn["parameters"]["properties"]["x"]["type"], "integer")
+        self.assertEqual(fn["parameters"]["required"], ["x"])

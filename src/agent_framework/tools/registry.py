@@ -45,8 +45,37 @@ def _json_type(declared: str) -> str:
     return "string"
 
 
+ARG_LINE_RE = re.compile(r"^\s{2,}([\w.\-]+)\s*(?:\([^)]*\))?\s*:\s*(.+)$")
+
+
+def _docstring_parts(fn: Callable) -> Tuple[str, Dict[str, str]]:
+    """A tool's summary and per-argument text, read off its docstring.
+
+    The only description a tool written in Python has when no tool_def.xml
+    describes it. Without this the schema said "Auto-generated" and named the
+    parameters and nothing else -- which is all ten ARENA capabilities were
+    ever shown as, and a model handed ten undescribed functions answers in
+    prose instead of calling one.
+    """
+    doc = inspect.getdoc(fn) or ""
+    if not doc:
+        return "", {}
+
+    body, _, tail = doc.partition("Args:")
+    args: Dict[str, str] = {}
+    if tail:
+        for line in tail.splitlines():
+            if line.strip() in ("Returns:", "Raises:") or line.strip().endswith(":") \
+                    and not ARG_LINE_RE.match(line):
+                break
+            if match := ARG_LINE_RE.match(line):
+                args[match.group(1)] = match.group(2).strip()
+    return body.strip(), args
+
+
 def _schema_from_signature(fn: Callable) -> Dict[str, Any]:
     """Fallback for a tool with no tool_def.xml entry."""
+    _, arg_docs = _docstring_parts(fn)
     properties: Dict[str, Any] = {}
     required: List[str] = []
     for name, param in inspect.signature(fn).parameters.items():
@@ -58,6 +87,8 @@ def _schema_from_signature(fn: Callable) -> Dict[str, Any]:
         annotation = param.annotation
         declared = getattr(annotation, "__name__", str(annotation))
         properties[name] = {"type": _json_type(declared)}
+        if described := arg_docs.get(name):
+            properties[name]["description"] = described
         if param.default is inspect.Parameter.empty:
             required.append(name)
     return {"type": "object", "properties": properties, "required": required}
@@ -94,6 +125,8 @@ def _build_json_schema(name: str, schema_xml: str, fn: Callable) -> Dict[str, An
         if properties
         else _schema_from_signature(fn)
     )
+    if not description or description == "Auto-generated":
+        description = _docstring_parts(fn)[0]
     return {
         "type": "function",
         "function": {
