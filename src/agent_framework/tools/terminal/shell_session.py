@@ -49,6 +49,14 @@ class ShellExecutor:
             "unset PROMPT_COMMAND",
             "unset PROMPT",
             "unset RPROMPT",
+            # This pane is a real tty, so anything that pages on isatty(stdout)
+            # (git log/show/diff, man...) reaches for one by default even when
+            # a caller forgot --no-pager on one call out of many -- and a
+            # pager with no one to send it a keypress can wedge the session
+            # for the rest of the run. Disabling it here means a single
+            # forgotten flag costs nothing instead of the whole budget.
+            "export PAGER=cat",
+            "export GIT_PAGER=cat",
         ]
 
         for cmd in init_cmds:

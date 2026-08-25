@@ -232,6 +232,12 @@ class BaseAgent:
             self._emit_message_event(new_msg)
 
         if tool_calls:
+            # A turn that called a tool is not an empty one -- reset the
+            # streak here, or the counter is a lifetime total rather than a
+            # consecutive one and a long, otherwise healthy session eventually
+            # crosses 5 isolated formatting misses scattered across hundreds
+            # of turns and gets killed for a "loop" that was never one.
+            self.context.consecutive_empty_responses = 0
             return await self._dispatch_tools(tool_calls)
 
         # The only legitimate ways into waiting_for_input are the enter_wait_mode
