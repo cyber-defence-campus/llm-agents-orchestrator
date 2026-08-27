@@ -83,7 +83,7 @@ create-agent:
 		-H "Content-Type: application/json" \
 		-d '{ \
 			"agent_config": { \
-				"llm_config": {"model": "$${AGENT_MODEL:-gemini/gemini-3-flash-preview}"}, \
+				"llm_config": {"model": "$${AGENT_MODEL:-openrouter/z-ai/glm-5.3-flash}"}, \
 				"state": { \
 					"agent_id": "test-$$(date +%s)", \
 					"task": "This is a test. Simply respond with: Test successful!" \

@@ -79,7 +79,7 @@ curl -X POST http://localhost:8083/agents \
   -H "Content-Type: application/json" \
   -d '{
     "agent_config": {
-      "llm_config": {"model": "gemini/gemini-3-flash-preview"},
+      "llm_config": {"model": "openrouter/z-ai/glm-5.3-flash"},
       "state": {
         "agent_id": "my-agent-001",
         "task": "Research the topic of quantum computing and create a summary"
@@ -187,7 +187,7 @@ export AGENT_PROMPT_PATHS=/path/to/custom/prompts
 
 | Variable             | Description                | Default                         |
 | -------------------- | -------------------------- | ------------------------------- |
-| `AGENT_MODEL`        | LLM model (litellm format) | `gemini/gemini-3-flash-preview` |
+| `AGENT_MODEL`        | LLM model (litellm format) | `openrouter/z-ai/glm-5.3-flash` |
 | `OPENAI_API_KEY`     | OpenAI API key             | -                               |
 | `GEMINI_API_KEY`     | Google Gemini API key      | -                               |
 | `DEEPSEEK_API_KEY`   | DeepSeek API key           | -                               |

@@ -65,11 +65,12 @@ services:
     environment:
       - PYTHONPATH=/app:/app/src
       - REDIS_HOST=redis
-      - AGENT_MODEL=${AGENT_MODEL:-gemini/gemini-3-flash-preview}
+      - AGENT_MODEL=${AGENT_MODEL:-openrouter/z-ai/glm-5.3-flash}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - LLM_REASONING_EFFORT=${LLM_REASONING_EFFORT:-low}
       # Optional: Sandbox Configuration
       - AGENT_SANDBOX_MODE=${AGENT_SANDBOX_MODE:-false}
       # Optional: Point to sandbox if running with-sandbox profile

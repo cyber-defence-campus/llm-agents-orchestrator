@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import ClassVar
 
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 
 class ColorFormatter(logging.Formatter):
@@ -32,7 +32,7 @@ class ColorFormatter(logging.Formatter):
         return formatter.format(record)
 
 
-class CustomJsonFormatter(jsonlogger.JsonFormatter):
+class CustomJsonFormatter(JsonFormatter):
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
         log_record["@timestamp"] = log_record.get("asctime")
