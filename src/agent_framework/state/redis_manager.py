@@ -289,11 +289,48 @@ class RedisStateManager:
         except Exception as e:
             logger.error(f"Error deleting agent {agent_id}: {e}")
 
+    def _live_recipient(self, agent_id: str, depth: int = 0) -> str:
+        """Walk up a delegation chain until someone can actually read.
+
+        Reports are delivered through each agent's inbox, consumed only by
+        its own live loop. When the addressee already finished -- a middle
+        agent that completed without draining its inbox, or a report racing
+        its completion -- the message would sit there forever while every
+        ancestor up the chain sat in wait mode for a report that was never
+        coming. Finished agents cascade their mail upward; six hops is deep
+        enough for any real tree and stops cycles.
+        """
+        current = agent_id
+        for _ in range(6):
+            raw = self.client.hget(self.KEY_AGENTS_HASH, current)
+            if not raw:
+                return current
+            node = json.loads(raw)
+            if str(node.get("status", "")).lower() not in (
+                    "finished", "failed", "stopped"):
+                return current
+            parent = node.get("parent_id")
+            if not parent:
+                return current
+            current = parent
+        return current
+
     def add_message_to_queue(self, agent_id: str, message: Dict[str, Any]):
         if not self._is_connected():
             return
         try:
-            self.client.lpush(f"{self.PREFIX_MSG}{agent_id}", json.dumps(message))
+            target = self._live_recipient(agent_id)
+            if target != agent_id:
+                logger.info(
+                    f"Recipient {agent_id} is finished; cascading its mail "
+                    f"to {target}"
+                )
+                message = {**message,
+                           "content": (f"[forwarded from a finished "
+                                       f"sub-agent]\n\n"
+                                       f"{message.get('content', '')}")}
+            self.client.lpush(f"{self.PREFIX_MSG}{target}",
+                              json.dumps(message))
         except Exception as e:
             logger.error(f"Error queuing message for {agent_id}: {e}")
 

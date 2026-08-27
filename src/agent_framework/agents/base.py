@@ -348,4 +348,15 @@ class BaseAgent:
         self.context.signal_stop()
 
     async def _compact_memory(self):
-        pass
+        """Fold old exchanges into a digest so the prompt stops growing.
+
+        Called every 50 iterations; the trigger threshold lives on the
+        context so short sessions never pay for it.
+        """
+        folded = self.context.compact()
+        if folded:
+            logger.info(
+                "Context compacted: %s earlier exchanges folded into a "
+                "digest (%s messages remain)",
+                folded, len(self.context.messages),
+            )

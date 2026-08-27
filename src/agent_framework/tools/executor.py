@@ -37,10 +37,34 @@ logger = logging.getLogger("agent_framework.tools")
 MAX_EXEC_TIMEOUT = 900.0
 
 
+def _tool_contract_error(
+    tool_name: str, agent_state: Any | None
+) -> str | None:
+    """Return an error when a model calls outside its per-agent contract.
+
+    Tool schemas are guidance, not an authorization boundary. A model can
+    still emit a name it was not shown, so the same allowlist must be checked
+    immediately before dispatch as well.
+    """
+    context = getattr(agent_state, "context_data", None)
+    if not isinstance(context, dict) or "capabilities" not in context:
+        return None
+    allowed = context.get("capabilities") or []
+    if tool_name not in allowed:
+        return (
+            f"Tool '{tool_name}' is outside this agent's capability contract; "
+            "obtain the required foothold/beacon before using it"
+        )
+    return None
+
+
 async def execute_tool(
     tool_name: str, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
     """Executes a tool, capping any oversized exec_timeout first."""
+    if error := _tool_contract_error(tool_name, agent_state):
+        return {"error": error, "type": "CapabilityError"}
+
     requested = kwargs.get("exec_timeout")
     capped = None
     try:
@@ -639,6 +663,9 @@ async def execute_tool_with_validation(
 
     assert target_tool_name is not None
 
+    if error := _tool_contract_error(target_tool_name, agent_state):
+        return {"error": error, "type": "CapabilityError"}
+
     return await execute_tool(target_tool_name, agent_state, **kwargs)
 
 
@@ -840,6 +867,32 @@ async def process_tool_invocations(
         )
 
         is_error, error_payload = _check_error_result(result)
+
+        if agent_state:
+            # Keep a bounded operational checkpoint in the agent state. The
+            # structured tool messages below are intentionally hidden from the
+            # LLM history, so compaction cannot reconstruct exact commands and
+            # their results reliably from the transcript alone.
+            agent_state.record_tool_result(
+                tool_name, tool_inv.get("args", {}), result, is_error=is_error)
+
+            consume_pivot_reminder = getattr(
+                agent_state, "consume_pivot_reminder", None)
+            if (callable(consume_pivot_reminder) and
+                    consume_pivot_reminder() is True):
+                conversation_history.append({
+                    "id": generate_ulid(),
+                    "role": "user",
+                    "content": (
+                        "System: the recent actions have not produced new "
+                        "evidence. Treat the current avenue as stale: inspect "
+                        "the latest diagnostics, then choose a materially "
+                        "different hypothesis or capability. Do not repeat "
+                        "the same action."
+                    ),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "iteration": agent_state.iteration,
+                })
 
         tool_result_timestamp = datetime.now(UTC).isoformat()
         result_content_for_history = {

@@ -73,7 +73,9 @@ class LLMConfig(BaseModel):
             else "Not Set"
         )
         logger.info(f"DEEPSEEK_API_KEY: {masked_key}")
-        model_name = self.model_name or os.getenv("AGENT_MODEL", "openai/gpt-5")
+        model_name = self.model_name or os.getenv(
+            "AGENT_MODEL", "openrouter/z-ai/glm-5.3-flash"
+        )
 
         if not model_name:
             raise ValueError(

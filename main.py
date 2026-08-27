@@ -53,6 +53,12 @@ class MessageRequest(BaseModel):
     sender: str = "user"
 
 
+class CapabilitiesRequest(BaseModel):
+    """Capabilities that are currently available to an agent."""
+
+    capabilities: list[str]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Agent Manager Service starting up.")
@@ -251,6 +257,31 @@ async def stop_agent(agent_id: str):
         logger.info(f"Agent {agent_id} removed from active list.")
 
     return {"message": f"Agent {agent_id} stopped successfully."}
+
+
+@app.post("/agents/{agent_id}/capabilities", status_code=200)
+async def update_agent_capabilities(
+    agent_id: str, request: CapabilitiesRequest
+):
+    """Replace the tools exposed to a live agent.
+
+    Some deployments have a staged foothold: an agent starts with a shell and
+    must land a beacon before the typed capabilities become real. Updating the
+    live LLM object as well as Redis keeps both native tool schemas and the
+    persisted agent state on the same side of that handshake.
+    """
+    agent_data = active_agents.get(agent_id)
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not running")
+
+    capabilities = list(dict.fromkeys(request.capabilities))
+    agent = agent_data["agent"]
+    state = agent_data["state"]
+    state.context_data["capabilities"] = capabilities
+    state.touch()
+    agent.llm.update_capabilities(capabilities)
+    state_manager.add_agent_state(agent_id, state)
+    return {"agent_id": agent_id, "capabilities": capabilities}
 
 
 @app.delete("/agents/{agent_id}", status_code=200)

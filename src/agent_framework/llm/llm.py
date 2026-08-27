@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -27,6 +28,13 @@ _DEEPSEEK_V4_PRO_PRICES = {
     "litellm_provider": "deepseek",
     "mode": "chat",
 }
+_GLM_53_FLASH_PRICES = {
+    "input_cost_per_token": 0.075e-6,
+    "output_cost_per_token": 0.25e-6,
+    "cache_read_input_token_cost": 0.015e-6,
+    "litellm_provider": "openrouter",
+    "mode": "chat",
+}
 def _reported_cost(response) -> float | None:
     """Cost the provider itself reported, if any.
 
@@ -48,14 +56,14 @@ def _reported_cost(response) -> float | None:
     return None
 
 
-def _price_variants(base: str, prices: dict) -> dict:
+def _price_variants(base: str, prices: dict, provider: str = "deepseek") -> dict:
     """Register a model under the shapes a model id actually arrives in.
 
     Dated releases (…-0731) and provider prefixes (openrouter/…) are both
     common and neither matches a bare name, so registering only the bare one
     prices nothing in practice.
     """
-    names = {base, f"deepseek/{base}"}
+    names = {base, f"{provider}/{base}"}
     for name in tuple(names):
         names.add(f"openrouter/{name}")
     return {name: prices for name in names}
@@ -63,12 +71,13 @@ def _price_variants(base: str, prices: dict) -> dict:
 
 try:
     registry: dict = {}
-    for _base, _prices in (
-        ("deepseek-v4-flash", _DEEPSEEK_V4_PRICES),
-        ("deepseek-v4-flash-0731", _DEEPSEEK_V4_PRICES),
-        ("deepseek-v4-pro", _DEEPSEEK_V4_PRO_PRICES),
+    for _base, _prices, _provider in (
+        ("deepseek-v4-flash", _DEEPSEEK_V4_PRICES, "deepseek"),
+        ("deepseek-v4-flash-0731", _DEEPSEEK_V4_PRICES, "deepseek"),
+        ("deepseek-v4-pro", _DEEPSEEK_V4_PRO_PRICES, "deepseek"),
+        ("z-ai/glm-5.3-flash", _GLM_53_FLASH_PRICES, "z-ai"),
     ):
-        registry.update(_price_variants(_base, _prices))
+        registry.update(_price_variants(_base, _prices, _provider))
     litellm.register_model(registry)
 except Exception:  # pragma: no cover - pricing is best-effort
     pass
@@ -198,11 +207,13 @@ class LLM:
         self.job_id = None
         self.agent_id = None
         self.capabilities = None
+        self._xml_capability_state: tuple[str, ...] = ()
         if agent_state and agent_state.sandbox_info:
             self.job_id = agent_state.sandbox_info.get("job_id")
         if agent_state:
             self.agent_id = agent_state.agent_id
             self.capabilities = (agent_state.context_data or {}).get("capabilities")
+            self._xml_capability_state = tuple(self.capabilities or ())
 
         self._total_stats = RequestStats()
         self._last_request_stats = RequestStats()
@@ -593,6 +604,28 @@ class LLM:
             return None
         return get_tools_schema(only=self.capabilities) or None
 
+    def update_capabilities(self, capabilities: list[str]) -> None:
+        """Apply a post-creation capability change to this live LLM.
+
+        Native tool schemas are read on every request. XML mode needs an
+        appended definition because its system prompt was rendered at agent
+        creation; the appended block is added once per capability set.
+        """
+        updated = list(dict.fromkeys(capabilities))
+        self.capabilities = updated
+        state = tuple(updated)
+        if self._native_tools_enabled() or state == self._xml_capability_state:
+            self._xml_capability_state = state
+            return
+        self.system_prompt += (
+            "\n\n<tools_unlocked_after_beacon>\n"
+            "The beacon handshake completed. The following typed capabilities "
+            "are now available:\n"
+            f"{get_tools_prompt(only=updated)}\n"
+            "</tools_unlocked_after_beacon>"
+        )
+        self._xml_capability_state = state
+
     def _should_include_stop_param(self) -> bool:
         if not self.config.model_name:
             return True
@@ -734,7 +767,29 @@ class LLM:
             f"Completion Args for LiteLLM (Agent: {self.agent_name}): {completion_args}"
         )
 
-        response = await self.queue.make_request(completion_args)
+        # A free model on a shared pool answers 429 by the minute, and a
+        # failed request reads downstream as an agent in trouble -- or ends a
+        # run before it started. Backing off inside this call is what lets a
+        # long campaign survive upstream bursts.
+        attempts = max(1, int(os.getenv("AGENT_LLM_RETRIES", "6")))
+        base_delay = float(os.getenv("AGENT_LLM_RETRY_BASE_DELAY", "20"))
+        response = None
+        for attempt in range(attempts):
+            try:
+                response = await self.queue.make_request(completion_args)
+                break
+            except (litellm.RateLimitError,
+                    litellm.APIConnectionError,
+                    litellm.InternalServerError) as error:
+                if attempt >= attempts - 1:
+                    raise
+                delay = min(base_delay * (2 ** attempt), 120.0)
+                logger.warning(
+                    f"LLM attempt {attempt + 1}/{attempts} rate-limited or "
+                    f"unreachable for {self.agent_name}: backing off "
+                    f"{delay:.0f}s ({type(error).__name__})"
+                )
+                await asyncio.sleep(delay)
 
         self._total_stats.requests += 1
         self._last_request_stats = RequestStats(requests=1)

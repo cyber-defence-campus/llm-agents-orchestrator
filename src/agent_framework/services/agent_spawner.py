@@ -2,6 +2,7 @@ import logging
 from typing import Any, Callable
 
 from agent_framework.services import agent_service
+from agent_framework.tools.registry import get_tool_names
 
 logger = logging.getLogger("agent_framework.services.agent_spawner")
 _agent_starter: Callable[[dict, dict], tuple[str, Any]] | None = None
@@ -72,12 +73,41 @@ async def spawn_agent(
                 effective_model = model or inherited_model
                 effective_reasoning_effort = inherited_reasoning_effort
 
+        # `capabilities` historically doubled as a prompt-module argument.
+        # INTENTS also uses it to name the tools a child may use. Keep the two
+        # namespaces separate: passing a tool name as a prompt module produced
+        # a warning, while omitting the actual context allowlist exposed every
+        # globally registered tool to the child.
+        tool_names = set(get_tool_names())
+        requested = list(prompt_modules or ())
+        requested_tools = [name for name in requested if name in tool_names]
+        requested_prompts = [name for name in requested if name not in tool_names]
+
+        # A child has no implicit foothold or beacon binding. Do not inherit
+        # the parent's target-facing tools just because it shares history:
+        # that would make a fresh child appear to be on the compromised host.
+        # The parent must explicitly grant a tool, and the child always keeps
+        # only the coordination primitives needed to report back or wait.
+        coordination_tools = [
+            name for name in (
+                "complete_assignment", "dispatch_agent_msg", "enter_wait_mode"
+            ) if name in tool_names
+        ]
+
         context = None
         if inherit_context and job_id:
             hierarchy = agent_service.get_agent_hierarchy(job_id)
             if hierarchy:
                 context = "Current Agent Hierarchy:\n"
                 context += agent_service.format_agent_hierarchy(hierarchy)
+
+        child_task = task
+        if context:
+            child_task = f"{context}\n\nYour assigned task is as follows:\n{task}"
+
+        child_context = {"capabilities": list(dict.fromkeys(
+            coordination_tools + requested_tools
+        ))}
 
         sandbox_info = {"job_id": job_id} if job_id else {}
         if inherited_model:
@@ -92,12 +122,12 @@ async def spawn_agent(
 
         config_result, agent_state = agent_service.create_agent_config(
             name=name,
-            task=task,
+            task=child_task,
             job_id=job_id,
             parent_id=parent_state.agent_id,
-            prompt_modules=prompt_modules,
+            prompt_modules=requested_prompts,
             model=effective_model,
-            context=context,
+            context=child_context,
             api_key=inherited_api_key,
             reasoning_effort=effective_reasoning_effort,
         )
