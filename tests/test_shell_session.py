@@ -129,6 +129,26 @@ class TestShellExecutor:
         assert "cat <<" not in result["content"]
 
     @pytest.mark.asyncio
+    async def test_multiline_command_emits_end_marker(self, executor):
+        cmd = "printf 'first\\n'\nprintf 'second\\n'"
+        result = await executor.run(cmd, timeout=5.0)
+
+        assert result["status"] == "completed"
+        assert result["exit_code"] == 0
+        assert "first" in result["content"]
+        assert "second" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_external_command_cannot_drop_end_marker(self, executor):
+        # The marker must be sequenced in the same shell command.  A marker
+        # sent as a second tmux input line can disappear while sleep is active.
+        result = await executor.run("sleep 0.2; printf 'finished\\n'", timeout=3.0)
+
+        assert result["status"] == "completed"
+        assert result["exit_code"] == 0
+        assert "finished" in result["content"]
+
+    @pytest.mark.asyncio
     async def test_echo_suppression(self, executor):
         # Using a variable assignment and echo to distinguish input from output.
         # If echo is ON, we might see 'x=10' in the output.

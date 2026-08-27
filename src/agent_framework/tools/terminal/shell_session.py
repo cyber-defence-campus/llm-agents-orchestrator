@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +22,11 @@ class ShellExecutor:
         self.pane: Optional[libtmux.Pane] = None
         self.active = False
         self.busy = False
+        # `run()` is normally entered by one asyncio loop, but tool calls can
+        # also arrive from worker threads. Reserve the persistent tmux pane
+        # before the first await so two new commands cannot both pass the
+        # busy check and overwrite the marker context.
+        self._state_lock = threading.Lock()
 
         self._initialize()
 
@@ -98,7 +105,8 @@ class ShellExecutor:
         if cmd.strip() == "^C":
             self.pane.send_keys("C-c")
             await asyncio.sleep(0.5)
-            self.busy = False
+            with self._state_lock:
+                self.busy = False
             return {
                 "content": "^C (Interrupted)",
                 "status": "completed",
@@ -109,7 +117,10 @@ class ShellExecutor:
 
         is_wait_command = not cmd.strip() or cmd.strip().startswith("#")
 
-        if self.busy:
+        with self._state_lock:
+            busy = self.busy
+
+        if busy:
             if is_wait_command and not is_input:
                 return await self._wait_for_marker(timeout)
             elif not is_input:
@@ -133,15 +144,25 @@ class ShellExecutor:
                 "terminal_id": self.id,
             }
 
+        with self._state_lock:
+            if self.busy:
+                return {
+                    "error": "Session is busy with a running command (e.g., blocking call like 'top'). "
+                    "Use 'require_input=True' to interact with it, send '^C' to interrupt, "
+                    "or use a different terminal_id.",
+                    "status": "error",
+                    "terminal_id": self.id,
+                }
+            self.busy = True
+
         return await self._execute_command(cmd, timeout)
 
     async def _execute_command(self, cmd: str, timeout: float) -> dict:
-        self.busy = True
-
         try:
             if not cmd.strip():
                 # Should not happen here due to check in run(), but safe fallback
-                self.busy = False
+                with self._state_lock:
+                    self.busy = False
                 return {
                     "content": self._sanitize_output(self._read_buffer()),
                     "status": "running",
@@ -157,14 +178,31 @@ class ShellExecutor:
             self.pane.cmd("clear-history")
             await asyncio.sleep(0.05)
 
-            # Newline before the end marker keeps heredocs intact.
-            wrapped_cmd = f"echo '{self.current_start_marker}'; {cmd}\necho '{self.current_end_marker}'$?"
+            # tmux send-keys cannot reliably queue a second Enter while an
+            # external process is consuming the pane.  If the completion
+            # marker is sent as a later line, commands such as nmap can finish
+            # successfully while the marker is dropped, which makes callers
+            # retry an already-completed command.  Encode the exact script and
+            # send one shell line whose marker is sequenced by the shell after
+            # the script returns.  Sourcing a temporary file preserves
+            # multiline commands, heredocs, working-directory changes, and
+            # shell state between terminal calls.
+            encoded_command = base64.b64encode(cmd.encode("utf-8")).decode("ascii")
+            script_path = f"/tmp/.ag_cmd_{marker}.sh"
+            wrapped_cmd = (
+                f"echo '{self.current_start_marker}'; "
+                f"printf '%s' '{encoded_command}' | base64 -d > '{script_path}'; "
+                f"source '{script_path}'; "
+                f"__ag_exit_code=$?; rm -f '{script_path}'; "
+                f"echo '{self.current_end_marker}'$__ag_exit_code"
+            )
             self.pane.send_keys(wrapped_cmd, enter=True)
 
             return await self._wait_for_marker(timeout)
 
         except Exception:
-            self.busy = False
+            with self._state_lock:
+                self.busy = False
             raise
 
     async def _wait_for_marker(self, timeout: float) -> dict:
@@ -174,7 +212,8 @@ class ShellExecutor:
         end_marker = getattr(self, "current_end_marker", "")
 
         if not start_marker or not end_marker:
-            self.busy = False
+            with self._state_lock:
+                self.busy = False
             return {"error": "No active command context to wait for", "status": "error"}
 
         while (time.time() - start_ts) < timeout:
@@ -198,7 +237,8 @@ class ShellExecutor:
                     content = content.strip()
                     content = self._sanitize_output(content)
 
-                    self.busy = False
+                    with self._state_lock:
+                        self.busy = False
                     return {
                         "content": content,
                         "status": "completed",

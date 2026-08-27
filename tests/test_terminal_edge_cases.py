@@ -68,6 +68,18 @@ class TestBusySessionHandling:
         result2 = await executor.run("echo 'also quick'", timeout=5.0)
         assert result2["status"] == "completed"
 
+    @pytest.mark.asyncio
+    async def test_concurrent_new_command_cannot_replace_running_marker(self, executor):
+        """Only one new command may own a persistent pane at a time."""
+        first = asyncio.create_task(executor.run("sleep 2", timeout=0.2))
+        await asyncio.sleep(0)
+        second = await executor.run("echo 'must not run'", timeout=1.0)
+
+        assert (await first)["status"] == "running"
+        assert second["status"] == "error"
+        assert "busy" in second.get("error", "").lower()
+        await executor.run("^C")
+
 
 class TestParallelSessions:
     @pytest.fixture
