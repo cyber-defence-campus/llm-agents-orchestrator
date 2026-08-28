@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_WAIT_SECONDS = 300
 MAX_WAIT_SECONDS = 600
 AUTONOMOUS_COORDINATOR_WAIT_SECONDS = 30
+AUTONOMOUS_COORDINATOR_WAIT_LIMIT = 1
 
 
 @register_tool(sandbox_execution=False)
@@ -246,9 +247,30 @@ def enter_wait_mode(
                         "work; report to the parent or complete_assignment"
                     ),
                 }
-            # A root coordinator may yield to a worker, but never for the
-            # unbounded/default duration. Inter-agent messages resume it
-            # immediately; absent a message it gets a fresh decision cycle.
+            # A root coordinator may yield once to a worker, but an automatic
+            # run must not turn that bounded sleep into an unbounded polling
+            # loop by asking for another one after it wakes up. Inter-agent
+            # messages still resume the coordinator immediately; without one
+            # it must make progress, pivot, or finish instead.
+            wait_count = int(
+                getattr(agent_state, "tactical_memory", {}).get(
+                    "autonomous_wait_count", 0
+                ) or 0
+            )
+            if wait_count >= AUTONOMOUS_COORDINATOR_WAIT_LIMIT:
+                return {
+                    "status": "error",
+                    "type": "CapabilityError",
+                    "error": (
+                        "Autonomous coordinator wait budget exhausted; do not "
+                        "wait again. Inspect the child state, continue with "
+                        "available evidence, or complete_assignment."
+                    ),
+                    "wait_budget_exhausted": True,
+                }
+            memory = getattr(agent_state, "tactical_memory", None)
+            if isinstance(memory, dict):
+                memory["autonomous_wait_count"] = wait_count + 1
             requested = min(requested, AUTONOMOUS_COORDINATOR_WAIT_SECONDS)
         bounded = max(1, min(requested, MAX_WAIT_SECONDS))
         agent_state.set_waiting(timeout=bounded)

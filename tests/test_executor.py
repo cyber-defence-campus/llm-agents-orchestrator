@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 from agent_framework.tools.executor import (
     execute_tool,
@@ -113,6 +114,33 @@ class TestExecutorExecution:
             result = await execute_tool("enter_wait_mode", mock_agent_state)
 
         assert result["status"] == "paused"
+
+    def test_autonomous_root_cannot_reopen_wait_budget(self):
+        from agent_framework.tools.agent_management.actions import enter_wait_mode
+
+        state = SimpleNamespace(
+            agent_id="root-agent",
+            parent_id=None,
+            context_data={"autonomous_no_wait": True},
+            tactical_memory={},
+            set_waiting=MagicMock(),
+        )
+        with patch(
+            "agent_framework.tools.agent_management.actions.db.update_agent_status"
+        ), patch(
+            "agent_framework.tools.agent_management.actions.db.update_agent_node_fields"
+        ):
+            first = enter_wait_mode(state, max_wait_seconds=600)
+            second = enter_wait_mode(state, max_wait_seconds=600)
+
+        assert first == {
+            "status": "paused",
+            "mode": "waiting",
+            "max_wait_seconds": 30,
+        }
+        assert second["type"] == "CapabilityError"
+        assert second["wait_budget_exhausted"] is True
+        state.set_waiting.assert_called_once_with(timeout=30)
 
     @pytest.mark.asyncio
     async def test_autonomous_wait_is_blocked_without_an_allowlist(
