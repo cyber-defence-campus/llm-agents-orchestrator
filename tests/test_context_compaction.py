@@ -186,3 +186,21 @@ def test_repeated_failed_actions_trip_autonomous_circuit_breaker():
     assert ctx.should_terminate() is True
     assert ctx.tactical_memory["stale_circuit_breaker"] == (
         "repeated_failed_actions")
+
+
+def test_one_suppressed_duplicate_stops_the_action_loop():
+    ctx = AgentContext()
+    args = {"capability": "lateral_move", "target": "10.0.0.6"}
+
+    ctx.record_tool_result(
+        "typed_capability", args,
+        {"ok": False, "error": "beacon did not answer"}, is_error=True)
+    assert ctx.stop_requested is False
+
+    ctx.record_tool_result(
+        "typed_capability", args,
+        {"ok": False, "error": "same action suppressed",
+         "duplicate_suppressed": True}, is_error=True)
+
+    assert ctx.stop_requested is True
+    assert ctx.tactical_memory["stale_circuit_breaker"] == "duplicate_action"

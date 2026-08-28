@@ -147,6 +147,9 @@ class AgentContext(BaseModel):
         self._remember("recent_tool_names", str(tool_name), limit=12)
 
         failed = self._result_failed(result, is_error)
+        duplicate_suppressed = (
+            isinstance(result, dict) and
+            bool(result.get("duplicate_suppressed")))
         action_signature = self._action_signature(tool_name, clean_args)
         evidence_signature = self._evidence_signature(tool_name, result)
         recent_evidence = self.tactical_memory.setdefault(
@@ -182,6 +185,13 @@ class AgentContext(BaseModel):
             self._tactical_set("pivot_reminder_sent", False)
         if stale_streak >= self.STALE_ACTION_STOP_LIMIT:
             self._tactical_set("stale_circuit_breaker", "repeated_failed_actions")
+            self.signal_stop()
+        elif failed and duplicate_suppressed:
+            # The executor has already proved this is the same failed action
+            # as the immediately preceding one. One such suppressed retry is
+            # enough evidence that the model is looping; do not spend the
+            # remaining stale-action grace window replaying it.
+            self._tactical_set("stale_circuit_breaker", "duplicate_action")
             self.signal_stop()
 
         # Phase is a generic operational checkpoint. It is deliberately
