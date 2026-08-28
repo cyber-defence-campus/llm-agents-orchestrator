@@ -125,6 +125,39 @@ class TestExecutorExecution:
         assert result["type"] == "CapabilityError"
 
     @pytest.mark.asyncio
+    async def test_declared_scope_blocks_terminal_before_dispatch(self, mock_agent_state):
+        mock_agent_state.context_data = {"scope": "172.28.0.0/16"}
+        with patch(
+            "agent_framework.tools.executor._dispatch_tool",
+            new_callable=AsyncMock,
+        ) as dispatch:
+            result = await execute_tool(
+                "run_shell_command",
+                mock_agent_state,
+                command="curl https://outside.invalid/health",
+            )
+
+        assert result["type"] == "ScopeError"
+        dispatch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_declared_scope_allows_lab_terminal_destination(self, mock_agent_state):
+        mock_agent_state.context_data = {"scope": "172.28.0.0/16"}
+        with patch(
+            "agent_framework.tools.executor._dispatch_tool",
+            new_callable=AsyncMock,
+            return_value={"status": "ok"},
+        ) as dispatch:
+            result = await execute_tool(
+                "run_shell_command",
+                mock_agent_state,
+                command="ssh alice@172.28.0.10 true",
+            )
+
+        assert result == {"status": "ok"}
+        dispatch.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_validation_before_execution(self, mock_agent_state):
         with patch(
             "agent_framework.tools.executor.get_tool_names", return_value=["valid_tool"]

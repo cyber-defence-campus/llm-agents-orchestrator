@@ -1,8 +1,11 @@
 import asyncio
+import ipaddress
 import inspect
 import json
 import logging
 import os
+import re
+import shlex
 from datetime import UTC, datetime
 from typing import Any
 from agent_framework.utils.id_utils import generate_ulid
@@ -35,6 +38,129 @@ logger = logging.getLogger("agent_framework.tools")
 # and never sees a fix made in this tree. This is the one choke point every
 # execution path passes through.
 MAX_EXEC_TIMEOUT = 900.0
+
+# TACTICS's operator container is dual-homed: the lab interface is joined at
+# run time, while the platform interface can see unrelated services. A prose
+# scope in the prompt is therefore not an authorization boundary. The Arena
+# bridge declares the lab CIDR in agent context and this executor checks the
+# command before it can reach either terminal-manager or sandbox execution.
+_IPV4_RE = re.compile(
+    r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"
+)
+_HOST_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9_-])"
+)
+_URL_HOST_RE = re.compile(
+    r"(?i)(?:[a-z][a-z0-9+.-]*://)(?:[^\s/@]+(?::[^\s/@]*)?@)?"
+    r"(?P<host>[A-Za-z0-9.-]+)"
+)
+_AT_HOST_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9_.-]+@)(?P<host>[A-Za-z0-9.-]+)"
+)
+_NETWORK_COMMANDS = frozenset(
+    {
+        "curl", "wget", "fetch", "nc", "ncat", "netcat", "ssh", "scp",
+        "sftp", "ftp", "telnet", "ping", "ping6", "traceroute",
+        "tracepath", "nmap", "masscan", "rustscan", "gobuster", "ffuf",
+        "nikto", "whatweb", "sqlmap", "smbclient", "rpcclient", "ldapsearch",
+        "snmpwalk", "dig", "host", "nslookup", "getent", "mount.cifs",
+    }
+)
+_PRIVATE_HOST_SUFFIXES = (
+    ".local", ".localhost", ".internal", ".intranet", ".lan", ".test",
+    ".example", ".corp", ".home", ".lab", ".ad",
+)
+_COMMAND_FILE_SUFFIXES = frozenset(
+    {
+        "txt", "json", "xml", "html", "htm", "log", "csv", "tsv", "yaml",
+        "yml", "py", "sh", "bash", "zsh", "md", "rst", "pdf", "zip", "gz",
+        "bz2", "xz", "tar", "pcap", "pcapng", "out", "conf", "cfg", "ini",
+        "db", "sqlite", "jpg", "jpeg", "png", "gif", "svg", "so", "bin",
+        "elf", "service", "socket", "nse", "lst", "pem", "key", "crt", "pub",
+        "template",
+    }
+)
+
+
+def _host_candidates(command: str) -> set[str]:
+    """Return hostnames in URL/SSH forms and network-tool arguments.
+
+    Host-looking strings in arbitrary shell text include ordinary filenames
+    such as ``scan.json``. Only network destinations and arguments to known
+    network tools are considered, while IPv4 addresses are checked globally.
+    """
+    hosts = {match.group("host") for match in _URL_HOST_RE.finditer(command)}
+    hosts.update(match.group("host") for match in _AT_HOST_RE.finditer(command))
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+
+    for index, token in enumerate(tokens):
+        executable = os.path.basename(token).lower()
+        if executable not in _NETWORK_COMMANDS:
+            continue
+        for argument in tokens[index + 1 :]:
+            for match in _HOST_RE.finditer(argument):
+                candidate = match.group(0).rstrip(".,;)]")
+                suffix = candidate.rsplit(".", 1)[-1].lower()
+                if suffix not in _COMMAND_FILE_SUFFIXES:
+                    hosts.add(candidate)
+    return hosts
+
+
+def _scope_error(
+    tool_name: str, kwargs: dict[str, Any], agent_state: Any | None
+) -> dict[str, str] | None:
+    """Reject terminal destinations outside an Arena-declared lab CIDR."""
+    if tool_name != "run_shell_command":
+        return None
+    context = getattr(agent_state, "context_data", None)
+    if not isinstance(context, dict) or not context.get("scope"):
+        return None
+
+    try:
+        scope = ipaddress.ip_network(str(context["scope"]), strict=False)
+    except ValueError:
+        return {
+            "error": "terminal scope is invalid; command was not dispatched",
+            "type": "ScopeError",
+        }
+
+    command = str(kwargs.get("command") or "")
+    for raw_address in _IPV4_RE.findall(command):
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError:
+            continue
+        if address.is_loopback or address.is_unspecified or address in scope:
+            continue
+        return {
+            "error": "command blocked: destination is outside the declared lab scope",
+            "type": "ScopeError",
+        }
+
+    for hostname in _host_candidates(command):
+        lower = hostname.rstrip(".").lower()
+        try:
+            address = ipaddress.ip_address(lower)
+        except ValueError:
+            address = None
+        if address is not None:
+            if address.is_loopback or address.is_unspecified or address in scope:
+                continue
+            return {
+                "error": "command blocked: destination is outside the declared lab scope",
+                "type": "ScopeError",
+            }
+        if lower == "localhost" or lower.endswith(_PRIVATE_HOST_SUFFIXES):
+            continue
+        return {
+            "error": "command blocked: hostname is outside the declared lab scope",
+            "type": "ScopeError",
+        }
+    return None
 
 
 def _tool_contract_error(
@@ -77,6 +203,8 @@ async def execute_tool(
     """Executes a tool, capping any oversized exec_timeout first."""
     if error := _tool_contract_error(tool_name, agent_state):
         return {"error": error, "type": "CapabilityError"}
+    if error := _scope_error(tool_name, kwargs, agent_state):
+        return error
 
     requested = kwargs.get("exec_timeout")
     capped = None

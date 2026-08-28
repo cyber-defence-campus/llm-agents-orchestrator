@@ -128,6 +128,11 @@ async def spawn_agent(
         child_context = {"capabilities": list(dict.fromkeys(child_tools))}
         if autonomous_no_wait:
             child_context["autonomous_no_wait"] = True
+        if parent_context.get("scope"):
+            # Scope is a job-level safety boundary, not a target capability.
+            # Keep it on every descendant even when the parent delegates a
+            # narrower tool set and does not share its target-facing tools.
+            child_context["scope"] = parent_context["scope"]
 
         sandbox_info = {"job_id": job_id} if job_id else {}
         if inherited_model:
