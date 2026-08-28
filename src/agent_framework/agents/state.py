@@ -53,7 +53,7 @@ class AgentContext(BaseModel):
     # the model obeying it forever. Stop after a small grace window so a
     # repeated failed avenue cannot consume the whole lease or leave a run
     # effectively hung behind tool calls.
-    STALE_ACTION_STOP_LIMIT: ClassVar[int] = 8
+    STALE_ACTION_STOP_LIMIT: ClassVar[int] = 4
 
     sandbox_id: Optional[str] = None
     sandbox_token: Optional[str] = None
