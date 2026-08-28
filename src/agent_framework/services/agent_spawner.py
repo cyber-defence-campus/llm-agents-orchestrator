@@ -117,8 +117,14 @@ async def spawn_agent(
         # INTENTS's allowlist strict once a beacon contract exists. This avoids
         # a child that is told to scan or SSH but can only send coordination
         # messages.
-        if "capabilities" not in parent_context and "run_shell_command" in tool_names:
-            child_tools.append("run_shell_command")
+        if "capabilities" not in parent_context:
+            # Legacy TACTICS children operate from the shared terminal, but
+            # they must also be able to return evidence to their parent. This
+            # is reporting only: target-facing access still comes solely from
+            # the terminal they were explicitly given.
+            for legacy_tool in ("run_shell_command", "report_finding"):
+                if legacy_tool in tool_names:
+                    child_tools.append(legacy_tool)
         child_context = {"capabilities": list(dict.fromkeys(child_tools))}
         if autonomous_no_wait:
             child_context["autonomous_no_wait"] = True
