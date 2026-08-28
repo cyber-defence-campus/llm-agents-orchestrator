@@ -21,6 +21,20 @@ class TestShellExecutor:
         assert result["exit_code"] == 0
         assert result["terminal_id"] == "test-session"
 
+    def test_network_auth_prompt_guard_is_narrow(self, executor):
+        assert executor._looks_like_unattended_auth_prompt(
+            "ssh app@host 'id'", "app@host's password:"
+        )
+        assert executor._looks_like_unattended_auth_prompt(
+            "sudo id", "[sudo] password for pentester:"
+        )
+        assert not executor._looks_like_unattended_auth_prompt(
+            "read -p 'Password: ' value", "Password: "
+        )
+        assert not executor._looks_like_unattended_auth_prompt(
+            "sshpass -p secret ssh app@host id", ""
+        )
+
     @pytest.mark.asyncio
     async def test_command_exit_code_success(self, executor):
         result = await executor.run("true", timeout=5.0)

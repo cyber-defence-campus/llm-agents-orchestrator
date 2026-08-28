@@ -29,6 +29,7 @@
     <note>WAITING FOR OUTPUT: Use 'exec_timeout' to wait for a command to finish. If a command is already running (busy), send an empty command or comment ("# waiting") to wait for it to complete.</note>
     <note>INTERRUPT BLOCKING COMMANDS: If a session is busy, send command="^C" to interrupt it. This sends Ctrl+C to the running process.</note>
     <note>INTERACT WITH RUNNING PROCESS: Use require_input=true to send input to an already-running process (e.g., password prompts, interactive menus).</note>
+    <note>AUTONOMOUS AUTHENTICATION: A persistent session interrupts an SSH/SCP/SFTP/rsync or sudo password prompt after a short grace period. Use non-interactive authentication (for example sshpass, keys, or BatchMode) instead of relying on a prompt.</note>
     <note>SESSION IS BUSY ERROR: This means a command is still running. You can: (1) Wait for it by sending an empty command (""), (2) Send "^C" to interrupt, or (3) Use a different session_id.</note>
   </usage_notes>
 </action_definition>

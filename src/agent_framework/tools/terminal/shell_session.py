@@ -12,6 +12,7 @@ import libtmux
 
 class ShellExecutor:
     MARKER_PREFIX = "__AG_CMD__"
+    AUTH_PROMPT_GRACE = 2.0
 
     def __init__(self, session_id: str, work_dir: str = "/workspace"):
         self.id = session_id
@@ -22,6 +23,7 @@ class ShellExecutor:
         self.pane: Optional[libtmux.Pane] = None
         self.active = False
         self.busy = False
+        self.current_command = ""
         # `run()` is normally entered by one asyncio loop, but tool calls can
         # also arrive from worker threads. Reserve the persistent tmux pane
         # before the first await so two new commands cannot both pass the
@@ -172,6 +174,7 @@ class ShellExecutor:
                 }
 
             marker = self._generate_marker()
+            self.current_command = cmd
             self.current_start_marker = f"{marker}_START"
             self.current_end_marker = f"{marker}_END"
 
@@ -207,6 +210,7 @@ class ShellExecutor:
 
     async def _wait_for_marker(self, timeout: float) -> dict:
         start_ts = time.time()
+        auth_prompt_since: float | None = None
 
         start_marker = getattr(self, "current_start_marker", "")
         end_marker = getattr(self, "current_end_marker", "")
@@ -219,6 +223,35 @@ class ShellExecutor:
         while (time.time() - start_ts) < timeout:
             await asyncio.sleep(0.15)
             output = self._read_buffer()
+
+            # A persistent tty makes an accidental bare SSH/SCP command look
+            # like a long-running scan: it prints a password prompt and then
+            # waits indefinitely for input. Autonomous agents should use
+            # non-interactive credentials; bound this specific failure mode
+            # so one bad first probe cannot consume the campaign clock or make
+            # every later call return "session is busy".
+            if self._looks_like_unattended_auth_prompt(
+                    self.current_command, output):
+                auth_prompt_since = auth_prompt_since or time.time()
+                if time.time() - auth_prompt_since >= self.AUTH_PROMPT_GRACE:
+                    self.pane.send_keys("C-c")
+                    await asyncio.sleep(0.5)
+                    with self._state_lock:
+                        self.busy = False
+                    return {
+                        "content": self._sanitize_output(output),
+                        "status": "completed",
+                        "exit_code": 130,
+                        "error": (
+                            "interactive authentication prompt detected; "
+                            "command was interrupted. Use non-interactive "
+                            "authentication such as sshpass or BatchMode."
+                        ),
+                        "working_dir": self.work_dir,
+                        "terminal_id": self.id,
+                    }
+            else:
+                auth_prompt_since = None
 
             end_pattern = rf"{re.escape(end_marker)}(\d+)"
             match = re.search(end_pattern, output)
@@ -255,6 +288,24 @@ class ShellExecutor:
             "working_dir": self.work_dir,
             "terminal_id": self.id,
         }
+
+    @staticmethod
+    def _looks_like_unattended_auth_prompt(command: str,
+                                           output: str) -> bool:
+        """Identify network-auth prompts that an autonomous shell cannot use.
+
+        Do not classify a generic ``read -p 'Password:'`` as a transport
+        failure: the terminal still supports deliberate interactive input.
+        The guard is for network clients that commonly wait forever when the
+        model forgot to supply credentials in the command itself.
+        """
+        if not re.search(r"(?i)(?:^|[;|&()\s])"
+                         r"(?:ssh|scp|sftp|rsync|sudo|su)"
+                         r"(?:$|[\s;|&()])", command or ""):
+            return False
+        return bool(re.search(
+            r"(?i)(?:password|passphrase)\s*(?:for\s+[^:\n]{1,120})?:",
+            output or ""))
 
     def _read_buffer(self) -> str:
         if not self.pane:
