@@ -198,9 +198,20 @@ def _tool_contract_error(
 
 
 async def execute_tool(
-    tool_name: str, agent_state: Any | None = None, **kwargs: Any
+    target_tool_name: str | None = None, agent_state: Any | None = None,
+    **kwargs: Any
 ) -> Any:
     """Executes a tool, capping any oversized exec_timeout first."""
+    # Keep ``tool_name`` available as a normal tool argument. `add_action`
+    # legitimately has a parameter with that name; using it as this function's
+    # first parameter made `execute_tool_with_validation("add_action", ...,
+    # tool_name="terminal")` fail in Python before dispatching the tool.
+    if target_tool_name is None:
+        target_tool_name = kwargs.pop("tool_name", None)
+    if not target_tool_name:
+        return {"error": "Tool name is missing", "type": "ValidationError"}
+
+    tool_name = target_tool_name
     if error := _tool_contract_error(tool_name, agent_state):
         return {"error": error, "type": "CapabilityError"}
     if error := _scope_error(tool_name, kwargs, agent_state):
@@ -303,6 +314,20 @@ async def _dispatch_tool(
             }
 
     return await _execute_tool_locally(tool_name, agent_state, **kwargs)
+
+
+def _missing_required_arguments(tool_func: Any, kwargs: dict[str, Any]) -> list[str]:
+    """Return required callable parameters absent from a tool invocation."""
+    missing: list[str] = []
+    for name, parameter in inspect.signature(tool_func).parameters.items():
+        if name == "agent_state" or parameter.kind in (
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            continue
+        if parameter.default is inspect.Parameter.empty and name not in kwargs:
+            missing.append(name)
+    return missing
 
 
 async def _try_local_orchestration(
@@ -700,10 +725,14 @@ async def _execute_tool_locally(
         converted_kwargs = convert_arguments(tool_func, kwargs)
         logger.debug(f"Converted Kwargs for '{tool_name}': {converted_kwargs}")
 
-        if tool_name == "add_action":
-            sig = inspect.signature(tool_func)
-            if "tool_name" in sig.parameters:
-                converted_kwargs["tool_name"] = tool_name
+        missing = _missing_required_arguments(tool_func, converted_kwargs)
+        if missing:
+            error_msg = (
+                f"Error executing tool '{tool_name}': missing required "
+                f"argument(s): {', '.join(missing)}"
+            )
+            logger.warning(error_msg)
+            return {"error": error_msg, "type": "ArgumentError"}
 
     except (ArgumentConversionError, ValidationError, ValueError) as e:
         error_msg = f"Error executing tool '{tool_name}': Invalid arguments - {e}"

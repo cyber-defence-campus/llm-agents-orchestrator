@@ -13,7 +13,7 @@ class TestBusySessionHandling:
         exc.terminate()
 
     @pytest.mark.asyncio
-    async def test_busy_session_error_when_command_running(self, executor):
+    async def test_timeout_releases_session_for_next_command(self, executor):
         """
         CRITICAL TEST: Verify that when a command is running,
         new commands (without require_input) get a clear error.
@@ -23,20 +23,20 @@ class TestBusySessionHandling:
         """
         result1 = await executor.run("sleep 10", timeout=0.5)
 
-        assert result1["status"] == "running"
-        assert executor.busy is True
+        assert result1["status"] == "error"
+        assert result1["timed_out"] is True
+        assert executor.busy is False
 
         result2 = await executor.run("echo 'test'", timeout=1.0)
 
-        assert result2["status"] == "error"
-        assert "busy" in result2.get("error", "").lower()
+        assert result2["status"] == "completed"
+        assert "test" in result2["content"]
         assert "terminal_id" in result2
 
     @pytest.mark.asyncio
     async def test_interrupt_with_ctrl_c(self, executor):
-        result1 = await executor.run("sleep 30", timeout=0.5)
+        result1 = await executor.run("cat", is_input=True, timeout=1.0)
         assert result1["status"] == "running"
-        assert executor.busy is True
 
         interrupt_result = await executor.run("^C", timeout=2.0)
 
@@ -50,7 +50,7 @@ class TestBusySessionHandling:
 
     @pytest.mark.asyncio
     async def test_require_input_bypasses_busy_check(self, executor):
-        result1 = await executor.run("cat", timeout=0.5)
+        result1 = await executor.run("cat", timeout=0.5, is_input=True)
         assert result1["status"] == "running"
 
         input_result = await executor.run("hello world", timeout=1.0, is_input=True)
@@ -75,10 +75,11 @@ class TestBusySessionHandling:
         await asyncio.sleep(0)
         second = await executor.run("echo 'must not run'", timeout=1.0)
 
-        assert (await first)["status"] == "running"
+        first_result = await first
+        assert first_result["status"] == "error"
+        assert first_result["timed_out"] is True
         assert second["status"] == "error"
         assert "busy" in second.get("error", "").lower()
-        await executor.run("^C")
 
 
 class TestParallelSessions:
@@ -98,7 +99,8 @@ class TestParallelSessions:
         result1 = await manager.execute_command(
             "sleep 10", terminal_id="session1", timeout=0.5
         )
-        assert result1["status"] == "running"
+        assert result1["status"] == "error"
+        assert result1["timed_out"] is True
 
         result2 = await manager.execute_command(
             "echo 'session2 works'", terminal_id="session2", timeout=5.0
@@ -109,8 +111,8 @@ class TestParallelSessions:
         result3 = await manager.execute_command(
             "echo 'session1 test'", terminal_id="session1", timeout=1.0
         )
-        assert result3["status"] == "error"
-        assert "busy" in result3.get("error", "").lower()
+        assert result3["status"] == "completed"
+        assert "session1 test" in result3["content"]
 
     @pytest.mark.asyncio
     async def test_can_switch_between_sessions(self, manager):
@@ -238,7 +240,8 @@ class TestRealWorldScenarios:
             terminal_id="scan",
             timeout=0.5,
         )
-        assert scan_result["status"] == "running"
+        assert scan_result["status"] == "error"
+        assert scan_result["timed_out"] is True
 
         work_results = []
         for cmd in [
@@ -255,8 +258,7 @@ class TestRealWorldScenarios:
         check_scan = await manager.execute_command(
             "echo 'test'", terminal_id="scan", timeout=1.0
         )
-        assert check_scan["status"] == "error"
-        assert "busy" in check_scan.get("error", "").lower()
+        assert check_scan["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_agent_properly_uses_ctrl_c_recovery(self, manager):
@@ -265,7 +267,8 @@ class TestRealWorldScenarios:
         retry = await manager.execute_command(
             "echo 'retry'", terminal_id="stuck", timeout=1.0
         )
-        assert retry["status"] == "error"
+        assert retry["status"] == "completed"
+        assert "retry" in retry["content"]
 
         interrupt = await manager.execute_command(
             "^C", terminal_id="stuck", timeout=2.0
@@ -303,35 +306,23 @@ class TestWaitingFunctionality:
         exc.terminate()
 
     @pytest.mark.asyncio
-    async def test_wait_for_completion_success(self, executor):
-        import time
-
+    async def test_timeout_interrupts_and_releases_session(self, executor):
         result1 = await executor.run("sleep 2; echo 'done'", timeout=0.1)
-        assert result1["status"] == "running"
-        assert executor.busy is True
-
-        start_wait = time.time()
-        result2 = await executor.run("# wait for it", timeout=5.0)
-        duration = time.time() - start_wait
-
-        assert duration >= 1.0
-        assert result2["status"] == "completed"
-        assert "done" in result2["content"]
+        assert result1["status"] == "error"
+        assert result1["timed_out"] is True
         assert executor.busy is False
 
+        result2 = await executor.run("echo 'after timeout'", timeout=5.0)
+        assert result2["status"] == "completed"
+        assert "after timeout" in result2["content"]
+
     @pytest.mark.asyncio
-    async def test_wait_times_out(self, executor):
-        import time
+    async def test_wait_times_out_and_releases_session(self, executor):
+        result2 = await executor.run("sleep 10", timeout=0.1)
 
-        await executor.run("sleep 10", timeout=0.1)
-
-        start_wait = time.time()
-        result2 = await executor.run("", timeout=1.0)
-        duration = time.time() - start_wait
-
-        assert duration < 2.0
-        assert result2["status"] == "running"
-        assert executor.busy is True
+        assert result2["status"] == "error"
+        assert result2["timed_out"] is True
+        assert executor.busy is False
 
     @pytest.mark.asyncio
     async def test_busy_error_for_real_commands(self, executor):
@@ -339,8 +330,7 @@ class TestWaitingFunctionality:
 
         result = await executor.run("echo 'no wait'", timeout=1.0)
 
-        assert result["status"] == "error"
-        assert "busy" in result.get("error", "").lower()
+        assert result["status"] == "completed"
 
 
 class TestAgentExpectedBehavior:
@@ -385,34 +375,31 @@ class TestAgentExpectedBehavior:
         assert result2["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_status_running_means_session_busy(self, manager):
+    async def test_timeout_status_releases_session(self, manager):
         """
-        PROMPT DOCUMENTATION: 'status: "running"' means the session is BUSY.
-
-        The agent MUST NOT send a new command to a busy session.
+        PROMPT DOCUMENTATION: A timed-out command is interrupted and releases
+        its terminal session, so the next autonomous action can proceed.
         """
         result = await manager.execute_command(
             "sleep 10", terminal_id="busy-test", timeout=0.5
         )
 
-        assert result["status"] == "running"
-        assert result["exit_code"] is None
+        assert result["status"] == "error"
+        assert result["timed_out"] is True
 
         result2 = await manager.execute_command(
             "echo 'this should fail'", terminal_id="busy-test", timeout=1.0
         )
-        assert result2["status"] == "error"
-        assert "busy" in result2.get("error", "").lower()
+        assert result2["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_status_running_tells_agent_to_use_different_session(self, manager):
+    async def test_explicit_input_is_the_only_running_status(self, manager):
         """
-        PROMPT DOCUMENTATION: If status is 'running', use a different session_id.
-
-        This simulates the correct agent behavior.
+        PROMPT DOCUMENTATION: A running status is reserved for an explicitly
+        interactive process that the agent chose to keep open.
         """
         result_a = await manager.execute_command(
-            "sleep 10", terminal_id="session_a", timeout=0.5
+            "cat", terminal_id="session_a", is_input=True, timeout=0.5
         )
         assert result_a["status"] == "running"
 
@@ -427,13 +414,12 @@ class TestAgentExpectedBehavior:
         """
         PROMPT DOCUMENTATION: Send command="" to wait for a busy session.
         """
-        await executor.run("sleep 1; echo 'finished'", timeout=0.1)
-        assert executor.busy is True
+        await executor.run("sleep 1; echo 'finished'", timeout=2.0)
 
         result = await executor.run("", timeout=5.0)
 
-        assert result["status"] == "completed"
-        assert "finished" in result["content"]
+        assert result["status"] == "error"
+        assert "no command is running" in result["error"].lower()
         assert executor.busy is False
 
     @pytest.mark.asyncio
@@ -441,27 +427,27 @@ class TestAgentExpectedBehavior:
         """
         PROMPT DOCUMENTATION: Send command="# waiting" to wait for a busy session.
         """
-        await executor.run("sleep 1; echo 'done waiting'", timeout=0.1)
-        assert executor.busy is True
+        await executor.run("sleep 1; echo 'done waiting'", timeout=2.0)
 
         result = await executor.run("# waiting", timeout=5.0)
 
-        assert result["status"] == "completed"
-        assert "done waiting" in result["content"]
+        assert result["status"] == "error"
+        assert "no command is running" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_waiting_timeout_returns_running(self, executor):
+    async def test_waiting_timeout_releases_session(self, executor):
         """
-        PROMPT DOCUMENTATION: If wait times out, status is still 'running'.
-
-        This helps the agent understand it should wait longer or interrupt.
+        PROMPT DOCUMENTATION: A finite terminal wait interrupts the command
+        when its budget expires, so it cannot wedge the agent.
         """
-        await executor.run("sleep 30", timeout=0.1)
+        timeout_result = await executor.run("sleep 30", timeout=0.1)
+        assert timeout_result["timed_out"] is True
 
         result = await executor.run("", timeout=0.5)
 
-        assert result["status"] == "running"
-        assert executor.busy is True
+        assert result["status"] == "error"
+        assert "no command is running" in result["error"].lower()
+        assert executor.busy is False
 
     @pytest.mark.asyncio
     async def test_ctrl_c_recovers_stuck_session(self, manager):
@@ -484,7 +470,7 @@ class TestAgentExpectedBehavior:
         assert "recovered" in result["content"]
 
     @pytest.mark.asyncio
-    async def test_chained_command_timeout_shows_running(self, manager):
+    async def test_chained_command_timeout_is_recoverable(self, manager):
         """
         PROMPT DOCUMENTATION: Avoid '&&' chaining with long commands.
 
@@ -495,8 +481,14 @@ class TestAgentExpectedBehavior:
             "sleep 5 && echo 'chain complete'", terminal_id="chain", timeout=0.5
         )
 
-        assert result["status"] == "running"
+        assert result["status"] == "error"
+        assert result["timed_out"] is True
         assert "chain complete" not in result.get("content", "")
+
+        recovery = await manager.execute_command(
+            "echo 'chain recovery'", terminal_id="chain", timeout=5.0
+        )
+        assert recovery["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_quick_chained_commands_work(self, manager):

@@ -56,7 +56,8 @@ class TestShellExecutor:
         # Note: exit will close the shell, but the code should be captured
         # The shell may restart via PROMPT_COMMAND issues, but ideally
         # we capture the exit code before that.
-        assert result["exit_code"] == 42 or result["status"] == "running"
+        assert result["status"] == "error"
+        assert result["timed_out"] is True
 
     @pytest.mark.asyncio
     async def test_multiline_output(self, executor):
@@ -78,9 +79,15 @@ class TestShellExecutor:
     async def test_marker_not_in_timeout_output(self, executor):
         result = await executor.run("sleep 10", timeout=0.5)
 
-        assert result["status"] == "running"
+        assert result["status"] == "error"
+        assert result["timed_out"] is True
+        assert executor.busy is False
         assert ShellExecutor.MARKER_PREFIX not in result["content"]
         assert "__AG_CMD__" not in result["content"]
+
+        recovery = await executor.run("echo recovered", timeout=5.0)
+        assert recovery["status"] == "completed"
+        assert "recovered" in recovery["content"]
 
     @pytest.mark.asyncio
     async def test_consecutive_commands_no_mixing(self, executor):
@@ -119,12 +126,12 @@ class TestShellExecutor:
     async def test_empty_command(self, executor):
         result = await executor.run("", timeout=5.0)
 
-        assert result["status"] == "running"
-        assert "__AG_CMD_END__" not in result["content"]
+        assert result["status"] == "error"
+        assert "no command is running" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_input_mode(self, executor):
-        result = await executor.run("cat", timeout=0.5)
+        result = await executor.run("cat", timeout=0.5, is_input=True)
         input_result = await executor.run("test input", timeout=1.0, is_input=True)
 
         assert input_result["status"] == "running"

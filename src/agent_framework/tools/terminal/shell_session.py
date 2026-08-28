@@ -13,6 +13,7 @@ import libtmux
 class ShellExecutor:
     MARKER_PREFIX = "__AG_CMD__"
     AUTH_PROMPT_GRACE = 2.0
+    TIMEOUT_INTERRUPT_GRACE = 2.0
 
     def __init__(self, session_id: str, work_dir: str = "/workspace"):
         self.id = session_id
@@ -134,6 +135,13 @@ class ShellExecutor:
                     "terminal_id": self.id,
                 }
 
+        if is_wait_command and not is_input:
+            return {
+                "error": "No command is running in this terminal session",
+                "status": "error",
+                "terminal_id": self.id,
+            }
+
         if is_input:
             self.pane.send_keys(cmd, enter=not no_enter)
             await asyncio.sleep(0.2)
@@ -253,38 +261,81 @@ class ShellExecutor:
             else:
                 auth_prompt_since = None
 
-            end_pattern = rf"{re.escape(end_marker)}(\d+)"
-            match = re.search(end_pattern, output)
+            result = self._completion_result(output, start_marker, end_marker)
+            if result is not None:
+                return result
 
-            if match:
-                exit_code = int(match.group(1))
+        # A bounded tool call must not turn into an unbounded tmux session.
+        # Interrupt first so a normal foreground process can leave the shell
+        # usable; if it ignores SIGINT, discard and recreate the pane before
+        # returning. Returning ``running`` here
+        # used to make every later autonomous action fail with "Session is
+        # busy" until the agent guessed that it needed to send ^C.
+        timed_out_output = self._read_buffer()
+        self.pane.send_keys("C-c")
+        interrupt_deadline = time.time() + self.TIMEOUT_INTERRUPT_GRACE
+        while time.time() < interrupt_deadline:
+            await asyncio.sleep(0.1)
+            timed_out_output = self._read_buffer()
+            result = self._completion_result(
+                timed_out_output, start_marker, end_marker
+            )
+            if result is not None:
+                with self._state_lock:
+                    self.busy = False
+                result["status"] = "error"
+                result["error"] = (
+                    f"command timed out after {timeout:g}s and was interrupted"
+                )
+                result["timed_out"] = True
+                return result
 
-                start_pattern = rf"{re.escape(start_marker)}\n?"
-                start_match = re.search(start_pattern, output)
-
-                if start_match:
-                    content_start = start_match.end()
-                    content_end = match.start()
-                    content = output[content_start:content_end]
-
-                    content = content.strip()
-                    content = self._sanitize_output(content)
-
-                    with self._state_lock:
-                        self.busy = False
-                    return {
-                        "content": content,
-                        "status": "completed",
-                        "exit_code": exit_code,
-                        "working_dir": self.work_dir,
-                        "terminal_id": self.id,
-                    }
-
-        # We leave self.busy = True: the command is likely still running.
+        self.terminate()
+        session_recreated = False
+        try:
+            self._initialize()
+            session_recreated = True
+        except Exception:
+            # The timeout is still reported below; the manager will create a
+            # replacement executor on the next call if pane initialization
+            # itself also failed.
+            pass
+        with self._state_lock:
+            self.busy = False
         return {
-            "content": self._sanitize_output(self._read_buffer()),
-            "status": "running",
+            "content": self._sanitize_output(timed_out_output),
+            "status": "error",
             "exit_code": None,
+            "error": (
+                f"command timed out after {timeout:g}s; terminal session was "
+                "recreated because it did not stop after interrupt"
+            ),
+            "timed_out": True,
+            "session_recreated": session_recreated,
+            "terminal_id": self.id,
+            "working_dir": self.work_dir,
+        }
+
+    def _completion_result(
+        self, output: str, start_marker: str, end_marker: str
+    ) -> Optional[dict]:
+        match = re.search(rf"{re.escape(end_marker)}(\d+)", output)
+        if not match:
+            return None
+
+        start_match = re.search(rf"{re.escape(start_marker)}\n?", output)
+        if not start_match:
+            return None
+
+        content = self._sanitize_output(
+            output[start_match.end() : match.start()].strip()
+        )
+        with self._state_lock:
+            self.busy = False
+        return {
+            "content": content,
+            "status": "completed",
+            "exit_code": int(match.group(1)),
             "working_dir": self.work_dir,
             "terminal_id": self.id,
         }
