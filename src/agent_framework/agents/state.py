@@ -49,6 +49,11 @@ class AgentContext(BaseModel):
     # outcomes and exact repeats, not on target-specific strings or guessed
     # exploitation artefacts.
     STALE_ACTION_LIMIT: ClassVar[int] = 5
+    # A pivot reminder is useful once, but an autonomous run must not rely on
+    # the model obeying it forever. Stop after a small grace window so a
+    # repeated failed avenue cannot consume the whole lease or leave a run
+    # effectively hung behind tool calls.
+    STALE_ACTION_STOP_LIMIT: ClassVar[int] = 8
 
     sandbox_id: Optional[str] = None
     sandbox_token: Optional[str] = None
@@ -175,6 +180,9 @@ class AgentContext(BaseModel):
         elif not failed:
             self._tactical_set("pivot_required", False)
             self._tactical_set("pivot_reminder_sent", False)
+        if stale_streak >= self.STALE_ACTION_STOP_LIMIT:
+            self._tactical_set("stale_circuit_breaker", "repeated_failed_actions")
+            self.signal_stop()
 
         # Phase is a generic operational checkpoint. It is deliberately
         # inferred from interface state, not from names of files, products or

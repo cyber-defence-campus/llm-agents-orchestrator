@@ -169,3 +169,20 @@ def test_equivalent_successful_outputs_are_stale_but_running_polls_are_neutral()
         {"ok": True, "status": "running", "stdout": ""},
     )
     assert ctx.tactical_memory["stale_action_streak"] == 1
+
+
+def test_repeated_failed_actions_trip_autonomous_circuit_breaker():
+    ctx = AgentContext()
+    args = {"capability": "enumerate_hosts"}
+
+    for _ in range(ctx.STALE_ACTION_STOP_LIMIT):
+        ctx.record_tool_result(
+            "typed_capability", args,
+            {"ok": False, "error": "beacon unavailable"},
+            is_error=True,
+        )
+
+    assert ctx.stop_requested is True
+    assert ctx.should_terminate() is True
+    assert ctx.tactical_memory["stale_circuit_breaker"] == (
+        "repeated_failed_actions")
