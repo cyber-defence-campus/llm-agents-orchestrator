@@ -79,18 +79,40 @@ class TestExecutorExecution:
             assert result["type"] == "NotFoundError"
 
     @pytest.mark.asyncio
-    async def test_autonomous_target_cannot_enter_unbounded_wait(
+    async def test_autonomous_child_cannot_enter_wait(
         self, mock_agent_state
     ):
         mock_agent_state.context_data = {
             "capabilities": ["enter_wait_mode"],
             "autonomous_no_wait": True,
         }
+        mock_agent_state.parent_id = "parent-agent"
 
         result = await execute_tool("enter_wait_mode", mock_agent_state)
 
         assert result["type"] == "CapabilityError"
-        assert "disabled for autonomous target work" in result["error"]
+        assert "disabled for autonomous child work" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_autonomous_root_wait_is_allowed_but_bounded(
+        self, mock_agent_state
+    ):
+        mock_agent_state.context_data = {
+            "capabilities": ["enter_wait_mode"],
+            "autonomous_no_wait": True,
+        }
+        mock_agent_state.parent_id = None
+
+        with patch(
+            "agent_framework.tools.executor.get_tool_by_name",
+            return_value=MagicMock(return_value={"status": "paused"}),
+        ), patch(
+            "agent_framework.tools.executor.should_execute_in_sandbox",
+            return_value=False,
+        ), patch("agent_framework.tools.executor.is_sandbox_runtime", False):
+            result = await execute_tool("enter_wait_mode", mock_agent_state)
+
+        assert result["status"] == "paused"
 
     @pytest.mark.asyncio
     async def test_autonomous_wait_is_blocked_without_an_allowlist(

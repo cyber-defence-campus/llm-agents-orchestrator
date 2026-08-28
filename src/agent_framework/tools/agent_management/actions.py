@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # autonomous run holding a lease, beacon or sandbox.
 DEFAULT_WAIT_SECONDS = 300
 MAX_WAIT_SECONDS = 600
+AUTONOMOUS_COORDINATOR_WAIT_SECONDS = 30
 
 
 @register_tool(sandbox_execution=False)
@@ -233,17 +234,22 @@ def enter_wait_mode(
 
     try:
         context = getattr(agent_state, "context_data", None) or {}
-        if context.get("autonomous_no_wait"):
-            return {
-                "status": "error",
-                "type": "CapabilityError",
-                "error": (
-                    "enter_wait_mode is disabled for autonomous target work; "
-                    "pivot or complete_assignment instead"
-                ),
-            }
         requested = (DEFAULT_WAIT_SECONDS if max_wait_seconds is None
                      else int(max_wait_seconds))
+        if context.get("autonomous_no_wait"):
+            if getattr(agent_state, "parent_id", None):
+                return {
+                    "status": "error",
+                    "type": "CapabilityError",
+                    "error": (
+                        "enter_wait_mode is disabled for autonomous child "
+                        "work; report to the parent or complete_assignment"
+                    ),
+                }
+            # A root coordinator may yield to a worker, but never for the
+            # unbounded/default duration. Inter-agent messages resume it
+            # immediately; absent a message it gets a fresh decision cycle.
+            requested = min(requested, AUTONOMOUS_COORDINATOR_WAIT_SECONDS)
         bounded = max(1, min(requested, MAX_WAIT_SECONDS))
         agent_state.set_waiting(timeout=bounded)
         db.update_agent_status(agent_id, "waiting")

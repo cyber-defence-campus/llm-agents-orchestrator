@@ -49,11 +49,16 @@ def _tool_contract_error(
     context = getattr(agent_state, "context_data", None)
     if not isinstance(context, dict):
         return None
+    # An autonomous coordinator may need to yield briefly while a delegated
+    # worker finishes, but a child must never park a live branch. The wait
+    # implementation clamps the coordinator's timeout to a small bound; this
+    # distinction prevents both indefinite waits and pointless polling loops.
     if (tool_name == "enter_wait_mode"
-            and context.get("autonomous_no_wait")):
+            and context.get("autonomous_no_wait")
+            and getattr(agent_state, "parent_id", None)):
         return (
-            "Tool 'enter_wait_mode' is disabled for autonomous target work; "
-            "a failed beacon requires a pivot or complete_assignment, not a wait"
+            "Tool 'enter_wait_mode' is disabled for autonomous child work; "
+            "report to the parent or complete_assignment instead"
         )
     if "capabilities" not in context:
         return None
