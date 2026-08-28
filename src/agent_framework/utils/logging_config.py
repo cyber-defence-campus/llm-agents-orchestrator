@@ -5,7 +5,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import ClassVar
 
-from pythonjsonlogger.json import JsonFormatter
+try:
+    # python-json-logger 3.x moved the formatter into ``json``.
+    from pythonjsonlogger.json import JsonFormatter
+except ModuleNotFoundError:
+    # The production image is pinned to the 2.x line, whose public import is
+    # ``jsonlogger``.  Keep the framework bootable while images are rebuilt.
+    from pythonjsonlogger.jsonlogger import JsonFormatter
 
 
 class ColorFormatter(logging.Formatter):

@@ -8,6 +8,12 @@ from agent_framework.tools import register_tool
 
 logger = logging.getLogger(__name__)
 
+# Waiting is a coordination convenience, never a lifecycle guarantee. An
+# omitted timeout used to leave a parent parked forever, which is fatal for an
+# autonomous run holding a lease, beacon or sandbox.
+DEFAULT_WAIT_SECONDS = 300
+MAX_WAIT_SECONDS = 600
+
 
 @register_tool(sandbox_execution=False)
 async def spawn_sub_agent(
@@ -51,7 +57,15 @@ async def spawn_sub_agent(
             inherit_context=share_history,
         )
         if result.get("success"):
+            autonomous_no_wait = bool(
+                (getattr(agent_state, "context_data", None) or {}).get(
+                    "autonomous_no_wait"
+                )
+            )
             result["hint"] = (
+                "The child will notify you via inter_agent_message when done; "
+                "continue with other evidence and do not park this run."
+                if autonomous_no_wait else
                 "You can call enter_wait_mode to wait for this agent to complete. "
                 "The agent will notify you via inter_agent_message when done."
             )
@@ -169,6 +183,16 @@ def dispatch_agent_msg(
     sender = agent_state.agent_id
     logger.info(f"Message dispatch: {sender} -> {recipient_id}")
 
+    # A self-message cannot delegate work or provide new information. In an
+    # autonomous run it is especially harmful: the model can keep queuing
+    # messages to itself instead of using the capabilities currently exposed
+    # by the executor (for example immediately after a beacon handoff).
+    if recipient_id in {"self", sender}:
+        return {
+            "status": "failed",
+            "reason": "Cannot dispatch a message to yourself; continue the task directly",
+        }
+
     target_node = db.get_agent_node(recipient_id)
     if not target_node:
         return {"status": "failed", "reason": "Recipient ID unknown"}
@@ -203,10 +227,24 @@ def enter_wait_mode(
     logger.info(f"Agent {agent_id} entering sleep: {wait_reason}")
 
     try:
-        agent_state.set_waiting(timeout=max_wait_seconds)
+        context = getattr(agent_state, "context_data", None) or {}
+        if context.get("autonomous_no_wait"):
+            return {
+                "status": "error",
+                "type": "CapabilityError",
+                "error": (
+                    "enter_wait_mode is disabled for autonomous target work; "
+                    "pivot or complete_assignment instead"
+                ),
+            }
+        requested = (DEFAULT_WAIT_SECONDS if max_wait_seconds is None
+                     else int(max_wait_seconds))
+        bounded = max(1, min(requested, MAX_WAIT_SECONDS))
+        agent_state.set_waiting(timeout=bounded)
         db.update_agent_status(agent_id, "waiting")
         db.update_agent_node_fields(agent_id, {"wait_reason": wait_reason})
-        return {"status": "paused", "mode": "waiting"}
+        return {"status": "paused", "mode": "waiting",
+                "max_wait_seconds": bounded}
     except Exception as e:
         return {"status": "error", "details": str(e)}
 

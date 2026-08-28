@@ -98,6 +98,24 @@ class TestAgentWaitingResumption(unittest.TestCase):
         )
         self.assertEqual(agent.context.consecutive_empty_responses, 1)
 
+    @patch("agent_framework.agents.base.db")
+    def test_wait_state_expires_and_resumes(self, mock_db):
+        agent_config = {
+            "state": {"agent_id": "test_agent_wait_timeout", "status": "running"},
+            "llm_config": {"model_name": "test-model"},
+        }
+        mock_db.get_agent_status.return_value = "waiting"
+        agent = BaseAgent(agent_config)
+        agent.context.set_waiting(timeout=0)
+
+        asyncio.run(agent._wait_cycle())
+
+        self.assertFalse(agent.context.waiting_for_input)
+        self.assertEqual(agent.context.status, "running")
+        mock_db.update_agent_status.assert_any_call(
+            "test_agent_wait_timeout", "running"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

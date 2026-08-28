@@ -87,11 +87,16 @@ async def spawn_agent(
         # the parent's target-facing tools just because it shares history:
         # that would make a fresh child appear to be on the compromised host.
         # The parent must explicitly grant a tool, and the child always keeps
-        # only the coordination primitives needed to report back or wait.
+        # only the coordination primitives needed to report back. Autonomous
+        # INTENTS campaigns opt out of the generic wait primitive: no beacon
+        # or target failure should park a run indefinitely.
+        parent_context = getattr(parent_state, "context_data", None) or {}
+        autonomous_no_wait = bool(parent_context.get("autonomous_no_wait"))
         coordination_tools = [
             name for name in (
                 "complete_assignment", "dispatch_agent_msg", "enter_wait_mode"
             ) if name in tool_names
+            and not (name == "enter_wait_mode" and autonomous_no_wait)
         ]
 
         context = None
@@ -108,6 +113,8 @@ async def spawn_agent(
         child_context = {"capabilities": list(dict.fromkeys(
             coordination_tools + requested_tools
         ))}
+        if autonomous_no_wait:
+            child_context["autonomous_no_wait"] = True
 
         sandbox_info = {"job_id": job_id} if job_id else {}
         if inherited_model:
@@ -153,7 +160,12 @@ async def spawn_agent(
             "success": True,
             "agent_id": agent_id,
             "message": f"Sub-agent '{name}' created and started.",
-            "hint": "You can call enter_wait_mode to wait for this agent to complete.",
+            "hint": (
+                "The child will notify you via inter_agent_message; continue "
+                "with other evidence and do not park this run."
+                if autonomous_no_wait else
+                "You can call enter_wait_mode to wait for this agent to complete."
+            ),
         }
 
     except Exception as e:

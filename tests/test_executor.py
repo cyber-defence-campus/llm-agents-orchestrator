@@ -79,6 +79,30 @@ class TestExecutorExecution:
             assert result["type"] == "NotFoundError"
 
     @pytest.mark.asyncio
+    async def test_autonomous_target_cannot_enter_unbounded_wait(
+        self, mock_agent_state
+    ):
+        mock_agent_state.context_data = {
+            "capabilities": ["enter_wait_mode"],
+            "autonomous_no_wait": True,
+        }
+
+        result = await execute_tool("enter_wait_mode", mock_agent_state)
+
+        assert result["type"] == "CapabilityError"
+        assert "disabled for autonomous target work" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_autonomous_wait_is_blocked_without_an_allowlist(
+        self, mock_agent_state
+    ):
+        mock_agent_state.context_data = {"autonomous_no_wait": True}
+
+        result = await execute_tool("enter_wait_mode", mock_agent_state)
+
+        assert result["type"] == "CapabilityError"
+
+    @pytest.mark.asyncio
     async def test_validation_before_execution(self, mock_agent_state):
         with patch(
             "agent_framework.tools.executor.get_tool_names", return_value=["valid_tool"]

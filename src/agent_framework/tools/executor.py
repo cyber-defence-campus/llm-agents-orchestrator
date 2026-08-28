@@ -47,7 +47,15 @@ def _tool_contract_error(
     immediately before dispatch as well.
     """
     context = getattr(agent_state, "context_data", None)
-    if not isinstance(context, dict) or "capabilities" not in context:
+    if not isinstance(context, dict):
+        return None
+    if (tool_name == "enter_wait_mode"
+            and context.get("autonomous_no_wait")):
+        return (
+            "Tool 'enter_wait_mode' is disabled for autonomous target work; "
+            "a failed beacon requires a pivot or complete_assignment, not a wait"
+        )
+    if "capabilities" not in context:
         return None
     allowed = context.get("capabilities") or []
     if tool_name not in allowed:

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
@@ -339,7 +340,27 @@ class BaseAgent:
                 break
 
     async def _wait_cycle(self):
-        await asyncio.sleep(1)
+        # A legacy waiting state may have no timeout because older versions
+        # accepted None. Convert it here as well as in enter_wait_mode so a
+        # restored agent cannot remain parked forever.
+        if self.context.waiting_since is None:
+            self.context.waiting_since = datetime.now(UTC)
+        if self.context.wait_timeout is None:
+            self.context.wait_timeout = 300
+
+        elapsed = (datetime.now(UTC) - self.context.waiting_since).total_seconds()
+        remaining = self.context.wait_timeout - elapsed
+        if remaining <= 0:
+            self.context.resume()
+            self.context.status = "running"
+            db.update_agent_status(self.context.agent_id, "running")
+            self.context.append_message(
+                "user",
+                "System: wait expired without external input. Continue by "
+                "pivoting, retrying with new evidence, or completing the task.",
+            )
+            return
+        await asyncio.sleep(min(1.0, remaining))
 
     def _handle_runtime_error(self, err: Exception):
         logger.exception(f"Runtime Error: {err}")

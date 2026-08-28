@@ -262,8 +262,17 @@ class LLM:
                 logger.debug(
                     f"[LLM for {agent_name}] Loading prompt modules: {self.config.prompt_modules}"
                 )
+                module_context = {
+                    "task": agent_state.task if agent_state else "",
+                    "agent_hierarchy": agent_hierarchy,
+                    "context": (agent_state.context_data
+                                if agent_state else {}),
+                }
+                if agent_state and agent_state.context_data:
+                    module_context.update(agent_state.context_data)
                 prompt_module_content = load_prompt_modules(
-                    self.config.prompt_modules or [], self.jinja_env
+                    self.config.prompt_modules or [], self.jinja_env,
+                    context=module_context,
                 )
                 logger.debug(f"[LLM for {agent_name}] Prompt modules loaded.")
 

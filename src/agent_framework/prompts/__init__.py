@@ -85,7 +85,8 @@ def generate_modules_description() -> str:
 
 
 def load_prompt_modules(
-    module_names: list[str], jinja_env: Environment
+    module_names: list[str], jinja_env: Environment,
+    context: dict | None = None,
 ) -> dict[str, str]:
     import logging
 
@@ -102,6 +103,15 @@ def load_prompt_modules(
                     prompts_dirs.append(p)
 
     available_modules = get_available_prompt_modules()
+    # Modules are also included in the final system-template render, but the
+    # loader keeps a rendered copy for callers that use ``get_module``. The
+    # old pre-render called template.render() with no context, so a normal
+    # root-agent module containing ``agent_hierarchy | tojson`` logged a scary
+    # Undefined warning on every run before being rendered correctly later.
+    # Provide harmless defaults for direct callers and overlay the real agent
+    # context when the LLM supplies it.
+    render_context = {"task": "", "agent_hierarchy": []}
+    render_context.update(context or {})
 
     for module_name in module_names:
         try:
@@ -135,7 +145,7 @@ def load_prompt_modules(
                 template = jinja_env.get_template(module_path)
                 var_name = module_name.split("/")[-1]
                 try:
-                    module_content[var_name] = template.render()
+                    module_content[var_name] = template.render(**render_context)
                     logger.info(f"Loaded prompt module: {module_name} -> {var_name}")
                 except Exception as e:
                     logger.warning(
