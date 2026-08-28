@@ -108,6 +108,7 @@ def complete_assignment(
     if not supervisor_id:
         return {
             "status": "complete",
+            "agent_completed": True,
             "message": "Task completed. No supervisor to notify.",
         }
 
@@ -169,7 +170,11 @@ def complete_assignment(
             logger.exception("Error sending completion report")
             return {"status": "incomplete", "error": str(e)}
 
-    return {"status": "complete", "supervisor_notified": notify_supervisor}
+    return {
+        "status": "complete",
+        "agent_completed": True,
+        "supervisor_notified": notify_supervisor,
+    }
 
 
 @register_tool(sandbox_execution=False)

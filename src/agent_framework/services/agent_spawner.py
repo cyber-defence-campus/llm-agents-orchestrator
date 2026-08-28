@@ -110,9 +110,16 @@ async def spawn_agent(
         if context:
             child_task = f"{context}\n\nYour assigned task is as follows:\n{task}"
 
-        child_context = {"capabilities": list(dict.fromkeys(
-            coordination_tools + requested_tools
-        ))}
+        child_tools = coordination_tools + requested_tools
+        # Legacy/general TACTICS jobs do not carry a target capability
+        # allowlist: their operator surface is the terminal itself. Preserve
+        # that one explicit operator capability for children, while keeping
+        # INTENTS's allowlist strict once a beacon contract exists. This avoids
+        # a child that is told to scan or SSH but can only send coordination
+        # messages.
+        if "capabilities" not in parent_context and "run_shell_command" in tool_names:
+            child_tools.append("run_shell_command")
+        child_context = {"capabilities": list(dict.fromkeys(child_tools))}
         if autonomous_no_wait:
             child_context["autonomous_no_wait"] = True
 

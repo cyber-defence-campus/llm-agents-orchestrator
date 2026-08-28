@@ -1,7 +1,21 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent_framework.tools.agent_management.actions import dispatch_agent_msg
+from agent_framework.tools.agent_management.actions import (
+    complete_assignment,
+    dispatch_agent_msg,
+)
+
+
+def test_complete_assignment_signals_lifecycle_termination():
+    state = SimpleNamespace(agent_id="agent-1", parent_id=None)
+    state.mark_completed = lambda: None
+
+    with patch.object(complete_assignment.__globals__["db"], "update_agent_status"):
+        result = complete_assignment(state, "done")
+
+    assert result["status"] == "complete"
+    assert result["agent_completed"] is True
 
 
 def test_dispatch_agent_msg_rejects_self_alias_without_queueing():

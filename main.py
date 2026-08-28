@@ -106,9 +106,38 @@ async def run_agent(agent: DefaultAgent, agent_state: AgentContext):
             await agent.start_lifecycle(primary_task=agent_state.task)
 
         logger.info(f"Agent {agent_id} finished execution successfully.")
-        state_manager.update_agent_status(
-            agent_id, "finished", "Agent completed its task."
-        )
+        if agent_state.completed:
+            final_status = "completed"
+        elif agent_state.stop_requested:
+            final_status = "stopped"
+        elif agent_state.errors or agent_state.llm_failed:
+            final_status = "error"
+        else:
+            # A lifecycle that reaches its iteration limit without explicitly
+            # completing is not success, but it is still a terminal branch.
+            final_status = "finished"
+        state_manager.update_agent_status(agent_id, final_status)
+
+        # A child can terminate through an iteration limit, an LLM failure, or
+        # an operator stop without ever calling complete_assignment. Its
+        # parent must still receive a durable terminal report; otherwise a
+        # parent in wait mode has no event that can wake it.
+        if agent_state.parent_id and final_status != "completed":
+            state_manager.add_message_to_queue(
+                agent_state.parent_id,
+                {
+                    "id": f"system_{agent_id}",
+                    "from": agent_id,
+                    "content": (
+                        f"Child {agent_state.agent_name} terminated with "
+                        f"status={final_status}; no completion report was "
+                        "available. Continue with the remaining evidence or "
+                        "complete the parent task."
+                    ),
+                    "type": "info",
+                    "timestamp": agent_state.last_updated,
+                },
+            )
 
     except asyncio.CancelledError:
         logger.info(f"Agent {agent_id} was cancelled.")
