@@ -1,9 +1,6 @@
 import os
-import logging
 from typing import Any
 from pydantic import BaseModel, Field, model_validator
-
-logger = logging.getLogger(__name__)
 
 
 class LLMConfig(BaseModel):
@@ -66,13 +63,6 @@ class LLMConfig(BaseModel):
 
     @model_validator(mode="after")
     def complete_config(self) -> "LLMConfig":
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        masked_key = (
-            f"{api_key[:4]}...{api_key[-4:]}"
-            if api_key and len(api_key) > 8
-            else "Not Set"
-        )
-        logger.info(f"DEEPSEEK_API_KEY: {masked_key}")
         model_name = self.model_name or os.getenv(
             "AGENT_MODEL", "openrouter/z-ai/glm-5.3-flash"
         )
