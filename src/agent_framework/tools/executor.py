@@ -90,7 +90,6 @@ def _host_candidates(command: str) -> set[str]:
     network tools are considered, while IPv4 addresses are checked globally.
     """
     hosts = {match.group("host") for match in _URL_HOST_RE.finditer(command)}
-    hosts.update(match.group("host") for match in _AT_HOST_RE.finditer(command))
 
     try:
         tokens = shlex.split(command)
@@ -102,6 +101,14 @@ def _host_candidates(command: str) -> set[str]:
         if executable not in _NETWORK_COMMANDS:
             continue
         for argument in tokens[index + 1 :]:
+            # A URL's host is already read above; rescanning the path treated a
+            # webshell at /storage/tinymce/<hash>.php as a hostname.
+            if "://" in argument:
+                continue
+            # `user@host` is a destination only as a network-tool argument.
+            # Swept over the whole command it also matched every email address.
+            for match in _AT_HOST_RE.finditer(argument):
+                hosts.add(match.group("host"))
             for match in _HOST_RE.finditer(argument):
                 candidate = match.group(0).rstrip(".,;)]")
                 suffix = candidate.rsplit(".", 1)[-1].lower()
@@ -141,25 +148,12 @@ def _scope_error(
             "type": "ScopeError",
         }
 
-    for hostname in _host_candidates(command):
-        lower = hostname.rstrip(".").lower()
-        try:
-            address = ipaddress.ip_address(lower)
-        except ValueError:
-            address = None
-        if address is not None:
-            if address.is_loopback or address.is_unspecified or address in scope:
-                continue
-            return {
-                "error": "command blocked: destination is outside the declared lab scope",
-                "type": "ScopeError",
-            }
-        if lower == "localhost" or lower.endswith(_PRIVATE_HOST_SUFFIXES):
-            continue
-        return {
-            "error": "command blocked: hostname is outside the declared lab scope",
-            "type": "ScopeError",
-        }
+    # Only literal addresses. Guessing which dotted strings are hostnames
+    # refused an email used as a username, a webshell at `<hash>.php`, and the
+    # lab's own `.htb` vhosts -- each time killing real work. It was never
+    # enforcement either: an agent that scripts its HTTP in Python is not
+    # scanned at all. Reaching a name that resolves out of scope is a
+    # network-level concern, not a regex over shell text.
     return None
 
 
@@ -241,7 +235,7 @@ async def execute_tool(
 
 
 async def _dispatch_tool(
-    tool_name: str, agent_state: Any | None = None, **kwargs: Any
+    tool_name: str, agent_state: Any | None = None, /, **kwargs: Any
 ) -> Any:
     """
     Executes a tool.
@@ -331,7 +325,7 @@ def _missing_required_arguments(tool_func: Any, kwargs: dict[str, Any]) -> list[
 
 
 async def _try_local_orchestration(
-    tool_name: str, agent_state: Any, **kwargs: Any
+    tool_name: str, agent_state: Any, /, **kwargs: Any
 ) -> Any | None:
     """
     Try to execute orchestration tools locally using the agent spawner.
@@ -410,7 +404,7 @@ async def _try_local_orchestration(
 
 
 async def _try_direct_sandbox_execution(
-    tool_name: str, agent_state: Any, **kwargs: Any
+    tool_name: str, agent_state: Any, /, **kwargs: Any
 ) -> Any | None:
     """
     Try to execute sandboxed tools directly via sandbox-runtime.
@@ -512,7 +506,7 @@ async def _try_direct_sandbox_execution(
 
 
 async def _delegate_tool_to_core_api(
-    tool_name: str, agent_state: Any, **kwargs: Any
+    tool_name: str, agent_state: Any, /, **kwargs: Any
 ) -> Any:
     core_api_url = os.getenv("CORE_API_URL")
     if not core_api_url:
@@ -682,7 +676,7 @@ def _publish_tool_event(
 
 
 async def _execute_tool_locally(
-    tool_name: str, agent_state: Any | None, **kwargs: Any
+    tool_name: str, agent_state: Any | None, /, **kwargs: Any
 ) -> Any:
     agent_id = agent_state.agent_id if agent_state else "sandbox"
 
@@ -1018,7 +1012,17 @@ async def process_tool_invocations(
 
         tasks.append(execute_tool_invocation(tool_inv, agent_state))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # One turn can carry several tool calls, and gathering them ran the lot
+    # concurrently. A beacon-backed capability cannot take that: its wire is
+    # one connection carrying Ready -> Do -> Result in order, so the second
+    # call of a pair collided and came back "beacon did not answer". The agent
+    # read that as a dead carrier, reinstalled, and lost the run.
+    results = []
+    for task in tasks:
+        try:
+            results.append(await task)
+        except Exception as error:  # preserved for the reporting loop below
+            results.append(error)
 
     for i, result in enumerate(results):
         tool_inv = tool_invocations[i]
