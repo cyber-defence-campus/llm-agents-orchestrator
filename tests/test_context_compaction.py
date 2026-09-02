@@ -171,7 +171,16 @@ def test_equivalent_successful_outputs_are_stale_but_running_polls_are_neutral()
     assert ctx.tactical_memory["stale_action_streak"] == 1
 
 
-def test_repeated_failed_actions_trip_autonomous_circuit_breaker():
+def test_repeated_failed_actions_name_the_breaker_without_killing_the_agent():
+    """The breaker records why, and no longer stops the run.
+
+    Stopping on the fourth unproductive action ended runs that were
+    succeeding: one agent was killed while it sat on the target reading the
+    systemd unit it needed for the last privilege step. Retrying a failed
+    command is ordinary work -- an exploit attempt, a login, a scan that timed
+    out. A loop that really goes nowhere is bounded by the iteration ceiling
+    and the run clock instead.
+    """
     ctx = AgentContext()
     args = {"capability": "enumerate_hosts"}
 
@@ -182,13 +191,19 @@ def test_repeated_failed_actions_trip_autonomous_circuit_breaker():
             is_error=True,
         )
 
-    assert ctx.stop_requested is True
-    assert ctx.should_terminate() is True
     assert ctx.tactical_memory["stale_circuit_breaker"] == (
         "repeated_failed_actions")
+    assert ctx.stop_requested is False
+    assert ctx.should_terminate() is False
 
 
-def test_one_suppressed_duplicate_stops_the_action_loop():
+def test_one_suppressed_duplicate_asks_for_a_pivot_without_stopping():
+    """A duplicate nudges immediately, because there is nothing left to learn.
+
+    The executor has already proved this is the identical failed action, so
+    unlike a stale streak there is no point waiting for it to build. The model
+    is told to pivot and decides for itself.
+    """
     ctx = AgentContext()
     args = {"capability": "lateral_move", "target": "10.0.0.6"}
 
@@ -202,5 +217,6 @@ def test_one_suppressed_duplicate_stops_the_action_loop():
         {"ok": False, "error": "same action suppressed",
          "duplicate_suppressed": True}, is_error=True)
 
-    assert ctx.stop_requested is True
     assert ctx.tactical_memory["stale_circuit_breaker"] == "duplicate_action"
+    assert ctx.tactical_memory["pivot_required"] is True
+    assert ctx.stop_requested is False

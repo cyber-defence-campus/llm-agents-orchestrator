@@ -206,9 +206,15 @@ class AgentContext(BaseModel):
         # decides for itself; a loop that genuinely goes nowhere is bounded by
         # the iteration ceiling and the run clock instead.
         if stale_streak >= self.STALE_ACTION_STOP_LIMIT:
+            # The reason only. The generic checkpoint above already asks for a
+            # pivot, at a streak of STALE_ACTION_LIMIT; asking again from here,
+            # at the lower STOP_LIMIT, pre-empted it by an action and made the
+            # two mechanisms disagree about when the model is told anything.
             self._tactical_set("stale_circuit_breaker", "repeated_failed_actions")
-            self._tactical_set("pivot_required", True)
         elif failed and duplicate_suppressed:
+            # A duplicate is different: the executor has already proved this is
+            # the identical failed action, so there is nothing to learn by
+            # waiting for the streak to build. Nudge immediately.
             self._tactical_set("stale_circuit_breaker", "duplicate_action")
             self._tactical_set("pivot_required", True)
 
