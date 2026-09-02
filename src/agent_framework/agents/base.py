@@ -39,7 +39,13 @@ def _resolve_template_paths(agent_type_name: str) -> List[Path]:
 
 
 class BaseAgent:
-    MAX_ITERATION_LIMIT = 200
+    # A runaway guard, not the budget. The arms are bounded by the clock and
+    # the token cap; at 200 this bound was the one that actually bit, and it
+    # killed working agents mid-chain -- a recon child was ended 146 tool calls
+    # into an exploitation chain, and the root died the same way while
+    # supervising. Long sessions are already handled by `compact()`, so the
+    # prompt does not grow without limit as the count rises.
+    MAX_ITERATION_LIMIT = 1000
     agent_name: str = "GenericAgent"
     jinja_env: Environment
 
@@ -180,6 +186,27 @@ class BaseAgent:
         finally:
             monitor_task.cancel()
             final_status = "stopped" if not self.context.completed else "completed"
+            if final_status == "stopped":
+                # Say why. An agent that exits without completing was recorded
+                # only as "stopped" with an empty error, so a run that lost a
+                # working child looked identical to one that was told to stop,
+                # and the reason had to be reconstructed from log archaeology.
+                if self.context.iteration >= self.context.max_iterations:
+                    reason = (
+                        f"iteration ceiling reached "
+                        f"({self.context.iteration}/{self.context.max_iterations})"
+                    )
+                elif self.context.stop_requested:
+                    reason = "stop requested"
+                else:
+                    reason = "loop exited without completing"
+                logger.warning(
+                    "Agent %s stopped: %s", self.context.agent_id, reason
+                )
+                self.context.record_error(f"stopped: {reason}")
+                db.update_agent_node_fields(
+                    self.context.agent_id, {"stop_reason": reason}
+                )
             self._persist_state(status_override=final_status)
 
         return {"status": self.context.status}
@@ -294,6 +321,24 @@ class BaseAgent:
                     f"</inter_agent_message>"
                 )
                 self.context.append_message("user", formatted)
+
+                # A child reporting in is the evidence that supervising it is
+                # productive, so it restores the autonomous coordinator's wait
+                # budget. That budget exists to stop an idle polling loop, but
+                # it is only ever incremented, so it was a lifetime allowance:
+                # a root that had delegated got one 30-second yield for the
+                # whole run, and then had nothing left but complete_assignment.
+                #
+                # This deliberately sits outside the waiting check. Once the
+                # budget is spent the wait is refused instantly, so the agent
+                # is never `waiting_for_input` when the reply lands -- a reset
+                # guarded by that flag can never fire, and the coordinator
+                # busy-polls its children instead of sleeping between reports.
+                # The timeout path below still does not reset: a wait nobody
+                # answered is exactly what the budget is meant to bound.
+                memory = getattr(self.context, "tactical_memory", None)
+                if isinstance(memory, dict):
+                    memory["autonomous_wait_count"] = 0
 
                 if self.context.waiting_for_input:
                     self.context.resume()

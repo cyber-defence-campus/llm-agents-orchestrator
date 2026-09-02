@@ -11,6 +11,12 @@ def _new_agent_id() -> str:
     return f"agent_{generate_ulid()[:12]}"
 
 
+# Read-only coordination: they report on the agent tree's own state and reach
+# no target, so repeating them is supervision rather than a loop.
+SUPERVISION_TOOLS = frozenset(
+    {"inspect_agent_tree", "get_findings", "get_actions", "enter_wait_mode"}
+)
+
 class AgentContext(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -168,10 +174,18 @@ class AgentContext(BaseModel):
         running_poll = (
             tool_name == "terminal" and isinstance(result, dict) and
             str(result.get("status", "")).lower() == "running")
+        # Supervision is not staleness. A coordinator waiting on a worker reads
+        # the same tree and the same findings every time by definition -- that
+        # is what supervising looks like -- so four such reads in a row tripped
+        # the breaker and killed the root while its child was mid-chain. These
+        # tools touch no target and cannot be the loop this guard exists to
+        # catch; the exemption is the same one `running_poll` already makes for
+        # polling a command that is still running.
+        supervision_poll = tool_name in SUPERVISION_TOOLS
         stale = failed or (
             evidence_signature is not None and not evidence_is_new)
         stale_streak = (
-            previous_streak if running_poll else
+            previous_streak if running_poll or supervision_poll else
             previous_streak + 1 if stale else 0
         )
         self._tactical_set("last_action_signature", action_signature)
@@ -183,16 +197,20 @@ class AgentContext(BaseModel):
         elif not failed:
             self._tactical_set("pivot_required", False)
             self._tactical_set("pivot_reminder_sent", False)
+        # These tell the agent it is repeating itself. They no longer kill it.
+        # Retrying a failed command is ordinary work -- an exploit attempt, a
+        # login, a scan that timed out -- and stopping on the first duplicate or
+        # the fourth unproductive action ended runs that were succeeding: one
+        # was killed while SSH'd into the target reading the systemd unit it
+        # needed for the last privilege step. The model is told to pivot and
+        # decides for itself; a loop that genuinely goes nowhere is bounded by
+        # the iteration ceiling and the run clock instead.
         if stale_streak >= self.STALE_ACTION_STOP_LIMIT:
             self._tactical_set("stale_circuit_breaker", "repeated_failed_actions")
-            self.signal_stop()
+            self._tactical_set("pivot_required", True)
         elif failed and duplicate_suppressed:
-            # The executor has already proved this is the same failed action
-            # as the immediately preceding one. One such suppressed retry is
-            # enough evidence that the model is looping; do not spend the
-            # remaining stale-action grace window replaying it.
             self._tactical_set("stale_circuit_breaker", "duplicate_action")
-            self.signal_stop()
+            self._tactical_set("pivot_required", True)
 
         # Phase is a generic operational checkpoint. It is deliberately
         # inferred from interface state, not from names of files, products or

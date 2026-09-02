@@ -166,3 +166,37 @@ class TestAPIDocumentation:
         data = response.json()
         assert data["info"]["title"] == "Agent Manager Service"
         assert "/agents" in data["paths"]
+
+
+def test_supervision_polls_do_not_trip_the_stale_action_breaker():
+    """A coordinator waiting on a worker reads the same tree and the same
+    findings every time. Counted as stale actions, four such reads killed the
+    root while its child was still working."""
+    from agent_framework.agents.state import AgentContext
+
+    context = AgentContext(agent_name="root")
+    same_tree = {"hierarchy_view": "Root -> Worker", "count": 2}
+    for _ in range(AgentContext.STALE_ACTION_STOP_LIMIT + 3):
+        context.record_tool_result("inspect_agent_tree", {}, same_tree, False)
+        context.record_tool_result("get_findings", {}, [{"id": "f1"}], False)
+
+    assert not context.stop_requested, (
+        "supervising a working child tripped the loop breaker"
+    )
+
+
+def test_a_repeated_failing_action_asks_for_a_pivot_but_does_not_kill():
+    """Repeating a failed command is ordinary work -- an exploit attempt, a
+    login, a scan that timed out. The breaker says so and lets the agent
+    decide; killing it ended runs mid-chain."""
+    from agent_framework.agents.state import AgentContext
+
+    context = AgentContext(agent_name="worker")
+    for _ in range(AgentContext.STALE_ACTION_STOP_LIMIT + 2):
+        context.record_tool_result(
+            "terminal", {"command": "curl http://x/"}, {"error": "refused"}, True
+        )
+
+    assert context.tactical_memory.get("pivot_required") is True
+    assert context.tactical_memory.get("stale_circuit_breaker")
+    assert not context.stop_requested

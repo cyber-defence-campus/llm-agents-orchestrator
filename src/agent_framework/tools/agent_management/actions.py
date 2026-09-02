@@ -13,7 +13,18 @@ logger = logging.getLogger(__name__)
 # autonomous run holding a lease, beacon or sandbox.
 DEFAULT_WAIT_SECONDS = 300
 MAX_WAIT_SECONDS = 600
-AUTONOMOUS_COORDINATOR_WAIT_SECONDS = 30
+# A coordinator supervising a worker is waiting on recon and exploitation that
+# take minutes, not seconds. At 30 the wait expired constantly, and every
+# expiry cost a turn: the root woke, re-read findings, narrated that it was
+# still waiting, got told that was not a tool call, and waited again -- until
+# it had burned its whole iteration budget and exited as `stopped` without an
+# error. Any child message still wakes it immediately, so a longer window
+# costs nothing when there is something to report.
+AUTONOMOUS_COORDINATOR_WAIT_SECONDS = 240
+# Consecutive waits nobody answered. Any inter-agent message resets the count
+# (see `_process_messages`), so this bounds an idle loop rather than the run:
+# two waits in a row with nothing in between is still refused, which is the
+# property `test_autonomous_root_cannot_reopen_wait_budget` protects.
 AUTONOMOUS_COORDINATOR_WAIT_LIMIT = 1
 
 
@@ -93,6 +104,24 @@ def complete_assignment(
 ) -> Dict[str, Any]:
     current_id = agent_state.agent_id
     supervisor_id = getattr(agent_state, "parent_id", None)
+
+    # A root that finishes while its workers are still running abandons the
+    # job: nobody is left to read their reports, act on them, or decide the
+    # run is over. It kept happening because the wait budget left a delegating
+    # root with no other move, and the result looked like the model quitting
+    # at 0/2 when its children were mid-chain. Waiting is now available while
+    # the tree works, so refuse the exit and say which option to take instead.
+    if supervisor_id is None and _tree_is_working(agent_state):
+        return {
+            "status": "error",
+            "type": "CapabilityError",
+            "error": (
+                "Sub-agents are still working; a root cannot complete while "
+                "its tree is running. enter_wait_mode until they report, or "
+                "stop them first if their work is no longer wanted."
+            ),
+            "tree_still_working": True,
+        }
 
     if discovered_items:
         if artifacts is None:
@@ -224,6 +253,35 @@ def dispatch_agent_msg(
         return {"status": "failed", "reason": str(ex)}
 
 
+def _tree_is_working(agent_state: Any) -> bool:
+    """Whether any other agent in this job is still doing work.
+
+    The coordinator's wait budget exists to stop a root parking when nothing
+    is happening. A root sleeping while its workers run is not that: it is
+    supervision, and it is the behaviour the delegation was for. Counting it
+    against the budget left a root that had delegated with nothing to do but
+    poll its children or complete, and it did both -- fanning out more
+    sub-agents between refusals, then finishing while they were still working.
+
+    Fails closed: no job, no store, or an error means the budget applies, so
+    an agent that cannot prove work is happening still cannot park.
+    """
+    try:
+        info = getattr(agent_state, "sandbox_info", None) or {}
+        job_id = info.get("job_id")
+        if not job_id:
+            return False
+        nodes = db.get_agent_nodes_by_job_id(job_id) or {}
+        mine = getattr(agent_state, "agent_id", None)
+        return any(
+            agent_id != mine
+            and str((node or {}).get("status", "")).lower() in ("running", "initializing")
+            for agent_id, node in nodes.items()
+        )
+    except Exception:
+        return False
+
+
 @register_tool(sandbox_execution=False)
 def enter_wait_mode(
     agent_state: Any,
@@ -257,7 +315,8 @@ def enter_wait_mode(
                     "autonomous_wait_count", 0
                 ) or 0
             )
-            if wait_count >= AUTONOMOUS_COORDINATOR_WAIT_LIMIT:
+            if wait_count >= AUTONOMOUS_COORDINATOR_WAIT_LIMIT and \
+                    not _tree_is_working(agent_state):
                 return {
                     "status": "error",
                     "type": "CapabilityError",

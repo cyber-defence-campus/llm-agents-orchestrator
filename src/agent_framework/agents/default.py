@@ -15,7 +15,7 @@ class DefaultAgent(BaseAgent):
         super().__init__(config)
         logger.info("DefaultAgent initialized.")
 
-    max_iterations = 200
+    max_iterations = 1000
 
     async def run_job(self, job_config: dict[str, Any]) -> dict[str, Any]:
         """
