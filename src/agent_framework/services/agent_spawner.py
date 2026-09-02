@@ -110,6 +110,25 @@ async def spawn_agent(
         if context:
             child_task = f"{context}\n\nYour assigned task is as follows:\n{task}"
 
+        # A child may never hold a tool its parent does not. `requested_tools`
+        # is checked only against the globally registered names, which says a
+        # tool exists rather than that this branch of the tree may use it. Once
+        # a parent can spawn during ingress, that gap is reachable: a parent
+        # holding `terminal` and `install_beacon` could grant a child `run` and
+        # arrive on the target by a route the staged boundary forbids it, with
+        # the sealed allowance still reporting two ingress tools. Where the
+        # parent carries a contract, that contract is the ceiling.
+        permitted = parent_context.get("capabilities")
+        if permitted:
+            ceiling = set(permitted)
+            refused = [tool for tool in requested_tools if tool not in ceiling]
+            if refused:
+                logger.warning(
+                    "refusing to grant %s to child %r: outside the parent's "
+                    "capability contract", ", ".join(sorted(refused)), name
+                )
+            requested_tools = [tool for tool in requested_tools
+                               if tool in ceiling]
         child_tools = coordination_tools + requested_tools
         # Legacy/general TACTICS jobs do not carry a target capability
         # allowlist: their operator surface is the terminal itself. Preserve
