@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from types import SimpleNamespace
 from agent_framework.tools.terminal.shell_session import ShellExecutor
 
 
@@ -136,6 +137,29 @@ class TestShellExecutor:
 
         assert input_result["status"] == "running"
         assert "__AG_CMD_END__" not in input_result["content"]
+
+    @pytest.mark.asyncio
+    async def test_input_mode_reports_completion_after_prompt(self, executor,
+                                                               monkeypatch):
+        # Answering an interactive prompt may finish the wrapped command
+        # before the input call returns.  Do not force the model to issue a
+        # second, unrelated command merely to discover that fact.
+        executor.busy = True
+        executor.current_start_marker = "__AG_CMD__prompt_START"
+        executor.current_end_marker = "__AG_CMD__prompt_END"
+        output = (
+            "__AG_CMD__prompt_START\n"
+            "Overwrite (y/n)? n\n"
+            "__AG_CMD__prompt_END0\n"
+        )
+        monkeypatch.setattr(executor, "_read_buffer", lambda: output)
+        executor.pane = SimpleNamespace(send_keys=lambda *args, **kwargs: None)
+
+        result = await executor.run("n", is_input=True)
+
+        assert result["status"] == "completed"
+        assert result["exit_code"] == 0
+        assert executor.busy is False
 
     @pytest.mark.asyncio
     async def test_heredoc_execution(self, executor):

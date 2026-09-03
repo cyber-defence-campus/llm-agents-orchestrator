@@ -167,7 +167,24 @@ class ShellExecutor:
         if is_input:
             self.pane.send_keys(cmd, enter=not no_enter)
             await asyncio.sleep(0.2)
-            content = self._sanitize_output(self._read_buffer())
+            output = self._read_buffer()
+            # Interactive input can also be the final response to a prompt
+            # (for example, answering ssh-keygen's overwrite question).  In
+            # that case the wrapped command has already emitted its end
+            # marker, so report completion immediately instead of leaving the
+            # model with a misleading ``status: running`` result.  Only check
+            # for completion when a command was already busy at entry; an
+            # input-mode call is also used to start a deliberately interactive
+            # process such as ``cat``.
+            if busy:
+                completion = self._completion_result(
+                    output,
+                    getattr(self, "current_start_marker", ""),
+                    getattr(self, "current_end_marker", ""),
+                )
+                if completion is not None:
+                    return completion
+            content = self._sanitize_output(output)
             return {
                 "content": content,
                 "status": "running",
