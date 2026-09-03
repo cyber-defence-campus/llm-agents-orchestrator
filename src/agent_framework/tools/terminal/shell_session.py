@@ -14,6 +14,12 @@ class ShellExecutor:
     MARKER_PREFIX = "__AG_CMD__"
     AUTH_PROMPT_GRACE = 2.0
     TIMEOUT_INTERRUPT_GRACE = 2.0
+    # A real terminal can print an entire HTML document, minified bundle, or
+    # recursive directory listing in one call. Feeding hundreds of thousands
+    # of characters back into the model crowds out the task state and makes a
+    # long-lived agent look like it has stopped reasoning. Keep the useful
+    # edges and tell the agent how to retrieve a narrower slice from the file.
+    MAX_OUTPUT_CHARS = 48_000
 
     def __init__(self, session_id: str, work_dir: str = "/workspace"):
         self.id = session_id
@@ -93,7 +99,23 @@ class ShellExecutor:
     def _sanitize_output(self, content: str) -> str:
         content = re.sub(rf"{re.escape(self.MARKER_PREFIX)}[^\n]*\n?", "", content)
         content = re.sub(r"\n{3,}", "\n\n", content)
-        return content.strip()
+        content = content.strip()
+        if len(content) <= self.MAX_OUTPUT_CHARS:
+            return content
+
+        # Preserve both the beginning (usually headers/usage) and the end
+        # (usually the result or error), rather than silently dropping the
+        # only useful line in a command's tail. The exact byte count is part
+        # of the marker so the agent can decide whether to grep a saved file.
+        head_chars = self.MAX_OUTPUT_CHARS * 2 // 3
+        tail_chars = self.MAX_OUTPUT_CHARS - head_chars
+        omitted = len(content) - self.MAX_OUTPUT_CHARS
+        return (
+            content[:head_chars]
+            + f"\n\n[terminal output truncated: {omitted} characters omitted; "
+              "save the command output to a file and grep/head/tail the needed slice]\n\n"
+            + content[-tail_chars:]
+        )
 
     async def run(
         self,

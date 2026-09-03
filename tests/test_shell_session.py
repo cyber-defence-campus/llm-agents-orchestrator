@@ -212,3 +212,15 @@ class TestShellExecutorSanitization:
         result = executor._sanitize_output(test_input)
 
         assert "\n\n\n" not in result
+
+    def test_sanitize_output_caps_large_results_without_losing_edges(self, executor):
+        head = "HEAD_MARKER"
+        tail = "TAIL_MARKER"
+        middle = "x" * (executor.MAX_OUTPUT_CHARS + 100)
+
+        result = executor._sanitize_output(head + middle + tail)
+
+        assert len(result) < executor.MAX_OUTPUT_CHARS + 200
+        assert head in result
+        assert tail in result
+        assert "terminal output truncated" in result
