@@ -58,6 +58,23 @@ class TestReasoningToolExtraction:
             {"toolName": "run_shell_command", "args": {"command": "printf 'ok'"}}
         ]
 
+    def test_recovers_open_parameter_and_orphan_child_pairs(self):
+        content = (
+            "<function=run_shell_command>"
+            "<parameter=command>printf 'ok'</arg_value>"
+            "<arg_key>session_id</arg_key><arg_value>main2</arg_value>"
+            "</tool_call></function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [
+            {
+                "toolName": "run_shell_command",
+                "args": {"command": "printf 'ok'", "session_id": "main2"},
+            }
+        ]
+
     @pytest.mark.asyncio
     async def test_tool_in_reasoning_content_only(self, llm_instance, mock_queue):
         """

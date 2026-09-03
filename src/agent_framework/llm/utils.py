@@ -44,6 +44,18 @@ MALFORMED_CHILD_PARAM_PATTERN = re.compile(
 MALFORMED_PARAM_CLOSE_PATTERN = re.compile(
     r"</arg_value>\s*parameter>", re.DOTALL | re.IGNORECASE
 )
+# Another gateway leaves the parameter opener intact but uses the child-value
+# close marker directly, then emits subsequent key/value pairs without their
+# enclosing ``<parameter>`` tag.  Keep both recoveries deliberately narrow.
+MALFORMED_OPEN_PARAM_PATTERN = re.compile(
+    r"<parameter(?:=|\s+name=)[\"']?([A-Za-z_][\w.\-]*)[\"']?>(.*?)</arg_value>",
+    re.DOTALL | re.IGNORECASE,
+)
+MALFORMED_ORPHAN_CHILD_PATTERN = re.compile(
+    r"<arg_key>\s*([A-Za-z_][\w.\-]*)\s*</arg_key>\s*"
+    r"<arg_value>(.*?)</arg_value>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
@@ -94,6 +106,8 @@ def _normalize_xml_tags(text: str) -> str:
     # cannot be recovered by PARAM_PATTERN itself.
     text = MALFORMED_CHILD_PARAM_PATTERN.sub(normalize_parameter, text)
     text = MALFORMED_PARAM_PATTERN.sub(normalize_parameter, text)
+    text = MALFORMED_OPEN_PARAM_PATTERN.sub(normalize_parameter, text)
+    text = MALFORMED_ORPHAN_CHILD_PATTERN.sub(normalize_parameter, text)
     text = MALFORMED_PARAM_CLOSE_PATTERN.sub("</parameter>", text)
     text = SPECIAL_TOKEN_PREFIX_PATTERN.sub("<", text)
 
