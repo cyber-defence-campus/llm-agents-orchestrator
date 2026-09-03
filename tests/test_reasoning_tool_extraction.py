@@ -45,6 +45,19 @@ class TestReasoningToolExtraction:
 
         assert calls == [{"toolName": "run_shell_command", "args": {"command": ""}}]
 
+    def test_recovers_spliced_arg_value_parameter_close(self):
+        content = (
+            "<function=run_shell_command>"
+            "<parameter=command>printf 'ok'</arg_value>parameter>"
+            "</function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [
+            {"toolName": "run_shell_command", "args": {"command": "printf 'ok'"}}
+        ]
+
     @pytest.mark.asyncio
     async def test_tool_in_reasoning_content_only(self, llm_instance, mock_queue):
         """

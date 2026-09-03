@@ -37,6 +37,13 @@ MALFORMED_CHILD_PARAM_PATTERN = re.compile(
     r"<arg_value>(.*?)</arg_value>\s*</parameter>",
     re.DOTALL | re.IGNORECASE,
 )
+# A gateway can also emit a normal ``<parameter=key>value`` opener but splice
+# the child-value closing marker into the parameter close as
+# ``</arg_value>parameter>``.  Recover only this exact terminator; broad
+# balancing here would risk turning ordinary model prose into arguments.
+MALFORMED_PARAM_CLOSE_PATTERN = re.compile(
+    r"</arg_value>\s*parameter>", re.DOTALL | re.IGNORECASE
+)
 
 
 def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
@@ -87,6 +94,7 @@ def _normalize_xml_tags(text: str) -> str:
     # cannot be recovered by PARAM_PATTERN itself.
     text = MALFORMED_CHILD_PARAM_PATTERN.sub(normalize_parameter, text)
     text = MALFORMED_PARAM_PATTERN.sub(normalize_parameter, text)
+    text = MALFORMED_PARAM_CLOSE_PATTERN.sub("</parameter>", text)
     text = SPECIAL_TOKEN_PREFIX_PATTERN.sub("<", text)
 
     if CALL_TAG_PATTERN.search(text):
