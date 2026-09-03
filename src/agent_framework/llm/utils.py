@@ -16,6 +16,27 @@ BARE_PARAM_PATTERN = re.compile(
 UNCLOSED_PARAM_PATTERN = re.compile(
     r"<parameter\s+name=([A-Za-z_][\w.\-]*)=(.*?)</parameter>", re.DOTALL
 )
+# Some OpenAI-compatible routes serialize the argument envelope as
+# ``<parameter=key</arg_key><arg_value>value</arg_value>``.  The function tag
+# is still present, but the old parser silently discarded the argument and
+# dispatched a call with no required parameters.  Normalize this dialect
+# before the ordinary parameter patterns run.  Keep the key restricted to the
+# same identifier shape as the supported forms so arbitrary prose is not
+# turned into a tool argument.
+MALFORMED_PARAM_PATTERN = re.compile(
+    r"<parameter(?:=|\s+name=)[\"']?([A-Za-z_][\w.\-]*)[\"']?"
+    r"\s*(?:</arg_key>)?\s*(?:>)?\s*"
+    r"<arg_value>(.*?)</arg_value>"
+    r"(?:</parameter>)?",
+    re.DOTALL | re.IGNORECASE,
+)
+# A second spelling puts the key in an explicit child tag.  It is emitted by
+# the same family of gateways when a tool call is converted twice.
+MALFORMED_CHILD_PARAM_PATTERN = re.compile(
+    r"<parameter>\s*<arg_key>\s*([A-Za-z_][\w.\-]*)\s*</arg_key>\s*"
+    r"<arg_value>(.*?)</arg_value>\s*</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
@@ -56,6 +77,16 @@ SPECIAL_TOKEN_PREFIX_PATTERN = re.compile(r"<｜[^｜<>\n]+｜(?=function=)")
 
 
 def _normalize_xml_tags(text: str) -> str:
+    def normalize_parameter(match: re.Match[str]) -> str:
+        key = match.group(1)
+        value = match.group(2)
+        return f"<parameter={key}>{value}</parameter>"
+
+    # Do this before function extraction: the malformed envelope can contain
+    # a literal ``>`` only after the gateway's closing arg-key marker, so it
+    # cannot be recovered by PARAM_PATTERN itself.
+    text = MALFORMED_CHILD_PARAM_PATTERN.sub(normalize_parameter, text)
+    text = MALFORMED_PARAM_PATTERN.sub(normalize_parameter, text)
     text = SPECIAL_TOKEN_PREFIX_PATTERN.sub("<", text)
 
     if CALL_TAG_PATTERN.search(text):

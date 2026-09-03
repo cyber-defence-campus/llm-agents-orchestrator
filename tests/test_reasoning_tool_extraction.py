@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from agent_framework.llm.llm import LLM, LLMConfig
+from agent_framework.llm.utils import parse_tool_invocations
 
 MOCK_CONFIG = LLMConfig(
     model_name="test-provider/test-model",
@@ -22,6 +23,28 @@ def llm_instance(mock_queue):
 
 
 class TestReasoningToolExtraction:
+    def test_recovers_gateway_parameter_envelope(self):
+        content = (
+            "<function=run_shell_command>\n"
+            "<parameter=command</arg_key><arg_value>id</arg_value>\n"
+            "</function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [{"toolName": "run_shell_command", "args": {"command": "id"}}]
+
+    def test_recovers_child_parameter_envelope_and_empty_value(self):
+        content = (
+            "<function=run_shell_command>"
+            "<parameter><arg_key>command</arg_key>"
+            "<arg_value></arg_value></parameter></function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [{"toolName": "run_shell_command", "args": {"command": ""}}]
+
     @pytest.mark.asyncio
     async def test_tool_in_reasoning_content_only(self, llm_instance, mock_queue):
         """
