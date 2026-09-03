@@ -491,6 +491,20 @@ class TestAgentExpectedBehavior:
         assert recovery["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_timeout_output_does_not_include_previous_command(self, manager):
+        await manager.execute_command(
+            "echo stale-output", terminal_id="bleed", timeout=5.0
+        )
+
+        result = await manager.execute_command(
+            "sleep 10", terminal_id="bleed", timeout=0.5
+        )
+
+        assert result["status"] == "error"
+        assert result["timed_out"] is True
+        assert "stale-output" not in result.get("content", "")
+
+    @pytest.mark.asyncio
     async def test_quick_chained_commands_work(self, manager):
         result = await manager.execute_command(
             "echo 'one' && echo 'two' && echo 'three'", timeout=5.0

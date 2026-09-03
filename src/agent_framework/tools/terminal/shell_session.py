@@ -231,6 +231,7 @@ class ShellExecutor:
         while (time.time() - start_ts) < timeout:
             await asyncio.sleep(0.15)
             output = self._read_buffer()
+            command_output = self._output_after_start(output, start_marker)
 
             # A persistent tty makes an accidental bare SSH/SCP command look
             # like a long-running scan: it prints a password prompt and then
@@ -239,7 +240,7 @@ class ShellExecutor:
             # so one bad first probe cannot consume the campaign clock or make
             # every later call return "session is busy".
             if self._looks_like_unattended_auth_prompt(
-                    self.current_command, output):
+                    self.current_command, command_output):
                 auth_prompt_since = auth_prompt_since or time.time()
                 if time.time() - auth_prompt_since >= self.AUTH_PROMPT_GRACE:
                     self.pane.send_keys("C-c")
@@ -247,7 +248,7 @@ class ShellExecutor:
                     with self._state_lock:
                         self.busy = False
                     return {
-                        "content": self._sanitize_output(output),
+                        "content": self._sanitize_output(command_output),
                         "status": "completed",
                         "exit_code": 130,
                         "error": (
@@ -271,12 +272,16 @@ class ShellExecutor:
         # returning. Returning ``running`` here
         # used to make every later autonomous action fail with "Session is
         # busy" until the agent guessed that it needed to send ^C.
-        timed_out_output = self._read_buffer()
+        timed_out_output = self._output_after_start(
+            self._read_buffer(), start_marker
+        )
         self.pane.send_keys("C-c")
         interrupt_deadline = time.time() + self.TIMEOUT_INTERRUPT_GRACE
         while time.time() < interrupt_deadline:
             await asyncio.sleep(0.1)
-            timed_out_output = self._read_buffer()
+            timed_out_output = self._output_after_start(
+                self._read_buffer(), start_marker
+            )
             result = self._completion_result(
                 timed_out_output, start_marker, end_marker
             )
@@ -315,6 +320,21 @@ class ShellExecutor:
             "terminal_id": self.id,
             "working_dir": self.work_dir,
         }
+
+    @staticmethod
+    def _output_after_start(output: str, start_marker: str) -> str:
+        """Return only output belonging to the current command.
+
+        A tmux pane retains visible lines even after ``clear-history``. When a
+        command times out or is interrupted before its end marker, returning
+        the whole pane lets a prior command's output look like evidence from
+        the current one. The start marker is emitted in the same shell line as
+        the command, so it is the only safe lower bound for partial output.
+        """
+        if not output or not start_marker:
+            return ""
+        match = re.search(rf"{re.escape(start_marker)}\n?", output)
+        return output[match.end():] if match else ""
 
     def _completion_result(
         self, output: str, start_marker: str, end_marker: str
