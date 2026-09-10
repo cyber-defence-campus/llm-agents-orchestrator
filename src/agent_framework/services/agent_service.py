@@ -168,7 +168,7 @@ def create_agent_config(
     agent_id = agent_state.agent_id
 
     platform_llm_name = model or os.getenv(
-        "AGENT_MODEL", "openrouter/z-ai/glm-5.3-flash"
+        "AGENT_MODEL", "openrouter/deepseek/deepseek-v4.1-flash"
     )
     effective_api_key = api_key or _resolve_api_key(platform_llm_name)
 

@@ -28,10 +28,10 @@ _DEEPSEEK_V4_PRO_PRICES = {
     "litellm_provider": "deepseek",
     "mode": "chat",
 }
-_GLM_53_FLASH_PRICES = {
-    "input_cost_per_token": 0.075e-6,
-    "output_cost_per_token": 0.25e-6,
-    "cache_read_input_token_cost": 0.015e-6,
+_DEEPSEEK_V41_FLASH_PRICES = {
+    "input_cost_per_token": 0.30e-6,
+    "output_cost_per_token": 1.20e-6,
+    "cache_read_input_token_cost": 0.006e-6,
     "litellm_provider": "openrouter",
     "mode": "chat",
 }
@@ -75,7 +75,7 @@ try:
         ("deepseek-v4-flash", _DEEPSEEK_V4_PRICES, "deepseek"),
         ("deepseek-v4-flash-0731", _DEEPSEEK_V4_PRICES, "deepseek"),
         ("deepseek-v4-pro", _DEEPSEEK_V4_PRO_PRICES, "deepseek"),
-        ("z-ai/glm-5.3-flash", _GLM_53_FLASH_PRICES, "z-ai"),
+        ("deepseek-v4.1-flash", _DEEPSEEK_V41_FLASH_PRICES, "deepseek"),
     ):
         registry.update(_price_variants(_base, _prices, _provider))
     litellm.register_model(registry)

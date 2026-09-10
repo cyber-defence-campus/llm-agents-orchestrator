@@ -64,7 +64,7 @@ class LLMConfig(BaseModel):
     @model_validator(mode="after")
     def complete_config(self) -> "LLMConfig":
         model_name = self.model_name or os.getenv(
-            "AGENT_MODEL", "openrouter/z-ai/glm-5.3-flash"
+            "AGENT_MODEL", "openrouter/deepseek/deepseek-v4.1-flash"
         )
 
         if not model_name:

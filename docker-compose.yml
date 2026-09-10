@@ -65,7 +65,7 @@ services:
     environment:
       - PYTHONPATH=/app:/app/src
       - REDIS_HOST=redis
-      - AGENT_MODEL=${AGENT_MODEL:-openrouter/z-ai/glm-5.3-flash}
+      - AGENT_MODEL=${AGENT_MODEL:-openrouter/deepseek/deepseek-v4.1-flash}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - LLM_API_BASE=${LLM_API_BASE:-}
