@@ -115,7 +115,14 @@ class TestLLMCore:
             assert kwargs["cost"] == 0.002
 
     @pytest.mark.asyncio
-    async def test_error_handling_rate_limit(self, llm_instance, mock_queue):
+    async def test_error_handling_rate_limit(
+        self, llm_instance, mock_queue, monkeypatch
+    ):
+        # `generate` backs off with capped exponential waits (20s, 40s, ...)
+        # between attempts, so the default retry budget made this unit test sit
+        # for over six minutes waiting out a sleep that only defers the raise it
+        # is asserting. One attempt exercises the raise with no backoff.
+        monkeypatch.setenv("AGENT_LLM_RETRIES", "1")
         mock_queue.make_request.side_effect = litellm.RateLimitError(
             message="Rate limit exceeded", model="test", llm_provider="test"
         )
