@@ -56,6 +56,20 @@ MALFORMED_ORPHAN_CHILD_PATTERN = re.compile(
     r"<arg_value>(.*?)</arg_value>",
     re.DOTALL | re.IGNORECASE,
 )
+# A fourth dialect leaves the `=` out of the opener entirely: the tag name is
+# `parameter`, and the key and its closing `>` sit in the body as
+# ``<parameter>command>id</parameter>``. PARAM_PATTERN needs the `=`/`name=`
+# opener and BARE_PARAM_PATTERN needs a literal `=` after the key, so this shape
+# matched neither and the argument was dropped silently. For `terminal` that
+# dropped `command`, leaving an empty call that the sandbox read as a poll; the
+# agent could not correct it while its intended command kept disappearing. The
+# terminator also accepts an unclosed final parameter that runs into
+# ``</function>``, which the same route emits. Keep the key restricted to an
+# identifier so ordinary prose is not turned into an argument.
+MALFORMED_ANGLE_PARAM_PATTERN = re.compile(
+    r"<parameter>\s*([A-Za-z_][\w.\-]*)\s*>(.*?)(?:</parameter>|(?=</function>))",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
@@ -109,6 +123,7 @@ def _normalize_xml_tags(text: str) -> str:
     text = MALFORMED_OPEN_PARAM_PATTERN.sub(normalize_parameter, text)
     text = MALFORMED_ORPHAN_CHILD_PATTERN.sub(normalize_parameter, text)
     text = MALFORMED_PARAM_CLOSE_PATTERN.sub("</parameter>", text)
+    text = MALFORMED_ANGLE_PARAM_PATTERN.sub(normalize_parameter, text)
     text = SPECIAL_TOKEN_PREFIX_PATTERN.sub("<", text)
 
     if CALL_TAG_PATTERN.search(text):

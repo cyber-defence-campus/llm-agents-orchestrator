@@ -75,6 +75,44 @@ class TestReasoningToolExtraction:
             }
         ]
 
+    def test_recovers_angle_bracket_parameter_without_equals(self):
+        """The opener omitted the `=`: `<parameter>command>...</parameter>`.
+
+        Without this recovery the stray `>` was not a tag boundary to either
+        parameter pattern, so the argument was dropped silently. For `terminal`
+        that meant `command` vanished and the call ran as an empty poll, and
+        the agent could never correct a call whose arguments kept disappearing.
+        """
+        content = (
+            "<function=run_shell_command>\n"
+            "<parameter>command>sleep 90; echo hi</parameter>\n"
+            "<parameter>purpose>diagnostic</parameter>\n"
+            "<parameter>timeout>120</parameter>\n"
+            "</function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [{
+            "toolName": "run_shell_command",
+            "args": {"command": "sleep 90; echo hi",
+                     "purpose": "diagnostic", "timeout": "120"},
+        }]
+
+    def test_recovers_angle_bracket_parameter_unclosed_before_function(self):
+        content = (
+            "<function=run_shell_command>\n"
+            "<parameter>command>printf ok</parameter>\n"
+            "<parameter>timeout>20</function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [{
+            "toolName": "run_shell_command",
+            "args": {"command": "printf ok", "timeout": "20"},
+        }]
+
     @pytest.mark.asyncio
     async def test_tool_in_reasoning_content_only(self, llm_instance, mock_queue):
         """
