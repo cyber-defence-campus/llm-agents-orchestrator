@@ -45,10 +45,36 @@ class ShellExecutor:
         if self.server.has_session(session_name):
             self.server.kill_session(session_name)
 
+        # Start the target shell directly rather than starting the account's
+        # login shell and typing `exec bash --noprofile --norc` into it. Keys
+        # sent to a login shell that is still sourcing its rc files race that
+        # startup: on a host whose default shell has a slow prompt the first
+        # `exec bash` is consumed before the shell is reading, the pane stays
+        # in the wrong shell, and every later call misses its marker and times
+        # out. The shell we want is the same one, named at session creation,
+        # and the settings the old loop exported travel as the session
+        # environment. It also means PATH is the tool server's -- which holds
+        # the operator's tool directories that a login shell's `/etc/profile`
+        # would reset back to the standard set.
         self.tmux_session = self.server.new_session(
             session_name=session_name,
             start_directory=self.work_dir,
             window_name="shell",
+            window_command="bash --noprofile --norc",
+            environment={
+                "TERM": "xterm",
+                # This pane is a real tty, so anything that pages on
+                # isatty(stdout) -- git log/show/diff, man -- reaches for a
+                # pager by default even when a caller forgot --no-pager, and a
+                # pager with no one to send it a keypress wedges the session
+                # for the rest of the run. Pinning both to `cat` means one
+                # forgotten flag costs nothing instead of the whole budget.
+                "PAGER": "cat",
+                "GIT_PAGER": "cat",
+                "PS1": "",
+                "PS2": "",
+                "PROMPT_COMMAND": "",
+            },
             x=200,
             y=50,
         )
@@ -56,35 +82,32 @@ class ShellExecutor:
 
         self.pane = self.tmux_session.active_window.active_pane
 
-        init_cmds = [
-            "exec bash --noprofile --norc",
-            "export TERM=xterm",
-            "stty -echo",
-            "export PS1=''",
-            "export PS2=''",
-            "unset PROMPT_COMMAND",
-            "unset PROMPT",
-            "unset RPROMPT",
-            # This pane is a real tty, so anything that pages on isatty(stdout)
-            # (git log/show/diff, man...) reaches for one by default even when
-            # a caller forgot --no-pager on one call out of many -- and a
-            # pager with no one to send it a keypress can wedge the session
-            # for the rest of the run. Disabling it here means a single
-            # forgotten flag costs nothing instead of the whole budget.
-            "export PAGER=cat",
-            "export GIT_PAGER=cat",
-        ]
+        # Silence input echo so the readiness probe below -- and every command
+        # after it -- cannot come back as output for the model to read.
+        self.pane.send_keys("stty -echo", enter=True)
 
-        for cmd in init_cmds:
-            self.pane.send_keys(cmd, enter=True)
-            time.sleep(0.1)
+        # Readiness sentinel: only the shell that drained the queue answers it.
+        # Poll for the token instead of sleeping a guessed interval, and resend
+        # it if the first keystrokes beat the shell to the pane, so a slow
+        # start cannot silently leave the session half-configured.
+        sentinel = f"__AG_READY__{uuid.uuid4().hex[:8]}"
+        deadline = time.time() + 5.0
+        ready = False
+        while time.time() < deadline and not ready:
+            self.pane.send_keys(f"echo {sentinel}", enter=True)
+            probe_end = time.time() + 0.25
+            while time.time() < probe_end:
+                if sentinel in self._read_buffer():
+                    ready = True
+                    break
+                time.sleep(0.01)
 
-        time.sleep(0.2)
+        # The sentinel and the init noise are cleared so a later command cannot
+        # read them as its own output. `clear` repaints the visible pane and
+        # the two `clear-history` calls drop the scrollback the sentinel is in.
         self.pane.send_keys("clear", enter=True)
-        time.sleep(0.2)
-
+        time.sleep(0.05)
         self.pane.cmd("clear-history")
-        time.sleep(0.1)
         self.pane.cmd("clear-history")
 
         self.active = True
