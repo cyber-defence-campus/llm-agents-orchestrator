@@ -340,6 +340,23 @@ async def _try_local_orchestration(
             is_spawner_available,
         )
 
+        # A required argument dropped by a malformed tool call used to reach
+        # the spawner anyway: `task_description` defaulted to "" and
+        # `agent_name` to "Sub-Agent", so a worker with an empty brief and no
+        # granted capabilities was created and the call reported success.
+        # Validate here, before the local spawner short-circuits the ordinary
+        # argument check in `_execute_tool_locally`.
+        tool_func = get_tool_by_name(tool_name)
+        if tool_func is not None:
+            missing = _missing_required_arguments(tool_func, kwargs)
+            if missing:
+                error_msg = (
+                    f"Error executing tool '{tool_name}': missing required "
+                    f"argument(s): {', '.join(missing)}"
+                )
+                logger.warning(error_msg)
+                return {"error": error_msg, "type": "ArgumentError"}
+
         if is_spawner_available():
             logger.info(f"Executing '{tool_name}' via local agent spawner")
 
