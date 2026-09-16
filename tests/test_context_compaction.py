@@ -220,3 +220,33 @@ def test_one_suppressed_duplicate_asks_for_a_pivot_without_stopping():
     assert ctx.tactical_memory["stale_circuit_breaker"] == "duplicate_action"
     assert ctx.tactical_memory["pivot_required"] is True
     assert ctx.stop_requested is False
+
+
+def test_persistent_duplicate_re_arms_the_pivot_reminder():
+    """A latch that survives one nudge is told again on every repeat.
+
+    A single duplicate gets a single nudge, which the model may miss or ignore.
+    Once the same suppression has recurred past the limit the reminder is armed
+    again each time, so a run that cannot escape cannot mistake the silence for
+    permission to keep resubmitting the identical call.
+    """
+    ctx = AgentContext()
+    args = {"capability": "lateral_move", "target": "10.0.0.6"}
+
+    for _ in range(ctx.DUPLICATE_ACTION_LIMIT):
+        ctx.record_tool_result(
+            "typed_capability", args,
+            {"ok": False, "error": "same action suppressed",
+             "duplicate_suppressed": True}, is_error=True)
+
+    assert ctx.tactical_memory["stale_circuit_breaker"] == (
+        "duplicate_action_persistent")
+    assert ctx.tactical_memory["pivot_required"] is True
+    assert ctx.consume_pivot_reminder() is True
+
+    ctx.record_tool_result(
+        "typed_capability", args,
+        {"ok": False, "error": "same action suppressed",
+         "duplicate_suppressed": True}, is_error=True)
+
+    assert ctx.consume_pivot_reminder() is True

@@ -1071,16 +1071,39 @@ async def process_tool_invocations(
                 agent_state, "consume_pivot_reminder", None)
             if (callable(consume_pivot_reminder) and
                     consume_pivot_reminder() is True):
-                conversation_history.append({
-                    "id": generate_ulid(),
-                    "role": "user",
-                    "content": (
+                # The executor already refused this action as an exact repeat
+                # of a failure, so a generic "try something different" is too
+                # weak: the model has to be told that resubmitting it is
+                # futile and that the tool or its arguments must change. Once
+                # the duplicate latch persists, this message is sent again on
+                # every duplicate rather than once.
+                breaker = ""
+                memory = getattr(agent_state, "tactical_memory", None)
+                if isinstance(memory, dict):
+                    breaker = str(memory.get("stale_circuit_breaker") or "")
+                if breaker in {
+                        "duplicate_action", "duplicate_action_persistent"}:
+                    content = (
+                        "System: the executor is refusing your last action as "
+                        "an exact repeat of one that already failed -- it did "
+                        "not run and will not run. Do not resubmit it. Change "
+                        "the tool or its arguments (a different command, or a "
+                        "different capability), or report the blockage with "
+                        "complete_assignment. Repeating the identical call "
+                        "cannot make progress."
+                    )
+                else:
+                    content = (
                         "System: the recent actions have not produced new "
                         "evidence. Treat the current avenue as stale: inspect "
                         "the latest diagnostics, then choose a materially "
                         "different hypothesis or capability. Do not repeat "
                         "the same action."
-                    ),
+                    )
+                conversation_history.append({
+                    "id": generate_ulid(),
+                    "role": "user",
+                    "content": content,
                     "timestamp": datetime.now(UTC).isoformat(),
                     "iteration": agent_state.iteration,
                 })

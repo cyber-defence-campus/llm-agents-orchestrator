@@ -60,6 +60,11 @@ class AgentContext(BaseModel):
     # repeated failed avenue cannot consume the whole lease or leave a run
     # effectively hung behind tool calls.
     STALE_ACTION_STOP_LIMIT: ClassVar[int] = 4
+    # Consecutive exact-duplicate suppressions before the pivot reminder is
+    # re-armed on every duplicate instead of being sent once. A duplicate means
+    # the executor refused the action outright, so waiting for it to clear is
+    # not a strategy: the model has to be told again each time it repeats.
+    DUPLICATE_ACTION_LIMIT: ClassVar[int] = 3
 
     sandbox_id: Optional[str] = None
     sandbox_token: Optional[str] = None
@@ -205,18 +210,34 @@ class AgentContext(BaseModel):
         # needed for the last privilege step. The model is told to pivot and
         # decides for itself; a loop that genuinely goes nowhere is bounded by
         # the iteration ceiling and the run clock instead.
+        # The reason only. The generic checkpoint above already asks for a
+        # pivot, at a streak of STALE_ACTION_LIMIT; asking again from here, at
+        # the lower STOP_LIMIT, pre-empted it by an action and made the two
+        # mechanisms disagree about when the model is told anything.
         if stale_streak >= self.STALE_ACTION_STOP_LIMIT:
-            # The reason only. The generic checkpoint above already asks for a
-            # pivot, at a streak of STALE_ACTION_LIMIT; asking again from here,
-            # at the lower STOP_LIMIT, pre-empted it by an action and made the
-            # two mechanisms disagree about when the model is told anything.
             self._tactical_set("stale_circuit_breaker", "repeated_failed_actions")
-        elif failed and duplicate_suppressed:
-            # A duplicate is different: the executor has already proved this is
-            # the identical failed action, so there is nothing to learn by
-            # waiting for the streak to build. Nudge immediately.
-            self._tactical_set("stale_circuit_breaker", "duplicate_action")
+        duplicate_streak = 0
+        if failed and duplicate_suppressed:
+            duplicate_streak = int(
+                self.tactical_memory.get("duplicate_suppression_streak", 0) or 0
+            ) + 1
+        self._tactical_set("duplicate_suppression_streak", duplicate_streak)
+        if failed and duplicate_suppressed:
+            # A duplicate is the executor's own proof that this exact action has
+            # nothing left to teach, so name it immediately instead of waiting
+            # for the streak to build. Past the limit, re-arm the pivot reminder
+            # on every further duplicate: a latch that has survived several
+            # nudges is not clearing on its own, and the one message the model
+            # was previously sent is not enough to end the loop.
+            persistent = duplicate_streak >= self.DUPLICATE_ACTION_LIMIT
+            self._tactical_set(
+                "stale_circuit_breaker",
+                "duplicate_action_persistent" if persistent
+                else "duplicate_action",
+            )
             self._tactical_set("pivot_required", True)
+            if persistent:
+                self._tactical_set("pivot_reminder_sent", False)
 
         # Phase is a generic operational checkpoint. It is deliberately
         # inferred from interface state, not from names of files, products or
