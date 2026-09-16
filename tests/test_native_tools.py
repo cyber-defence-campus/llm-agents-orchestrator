@@ -1,6 +1,7 @@
 import json
+import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from agent_framework.llm.llm import _native_tool_invocations
 from agent_framework.tools.registry import get_tools_schema, ToolRegistry
@@ -68,9 +69,16 @@ class TestNativeToolCalls(unittest.TestCase):
                 self.assertIn(req, params["properties"])
 
     def test_run_shell_command_schema_is_documented(self):
-        """It fell back to a bare stub with no parameters at all."""
-        schema = next(s for s in get_tools_schema()
-                      if s["function"]["name"] == "run_shell_command")
+        """It fell back to a bare stub with no parameters at all.
+
+        `run_shell_command` is a sandboxed tool, so it is only offered when
+        sandbox mode is on. The assertion is about its documented schema, not
+        the deployment mode, so ask for it explicitly rather than depending on
+        how the test process happens to be configured.
+        """
+        with patch.dict(os.environ, {"AGENT_SANDBOX_MODE": "true"}):
+            schema = next(s for s in get_tools_schema()
+                          if s["function"]["name"] == "run_shell_command")
         fn = schema["function"]
         self.assertNotIn("Auto-generated", fn["description"])
         self.assertIn("command", fn["parameters"]["properties"])

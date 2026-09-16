@@ -70,11 +70,18 @@ run-local:
 # Testing
 # ============================================================================
 
+# Tests are independent, so run them across all cores. The terminal tests are
+# wall-clock bound rather than CPU bound, so the win is large: the suite drops
+# from minutes to well under a minute. `test-serial` is kept for the rare case
+# where a failure needs a readable, ordered transcript.
 test:
+	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -n auto
+
+test-serial:
 	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -v
 
 test-cov:
-	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -v --cov=agent_framework --cov-report=term-missing
+	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -n auto --cov=agent_framework --cov-report=term-missing
 
 # Example: Create a simple test agent
 create-agent:
