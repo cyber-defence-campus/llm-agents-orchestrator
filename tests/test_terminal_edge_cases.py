@@ -418,8 +418,8 @@ class TestAgentExpectedBehavior:
 
         result = await executor.run("", timeout=5.0)
 
-        assert result["status"] == "error"
-        assert "no command is running" in result["error"].lower()
+        assert result["status"] == "idle"
+        assert "no command is running" in result["content"].lower()
         assert executor.busy is False
 
     @pytest.mark.asyncio
@@ -431,8 +431,8 @@ class TestAgentExpectedBehavior:
 
         result = await executor.run("# waiting", timeout=5.0)
 
-        assert result["status"] == "error"
-        assert "no command is running" in result["error"].lower()
+        assert result["status"] == "idle"
+        assert "no command is running" in result["content"].lower()
 
     @pytest.mark.asyncio
     async def test_waiting_timeout_releases_session(self, executor):
@@ -445,8 +445,8 @@ class TestAgentExpectedBehavior:
 
         result = await executor.run("", timeout=0.5)
 
-        assert result["status"] == "error"
-        assert "no command is running" in result["error"].lower()
+        assert result["status"] == "idle"
+        assert "no command is running" in result["content"].lower()
         assert executor.busy is False
 
     @pytest.mark.asyncio

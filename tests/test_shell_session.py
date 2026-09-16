@@ -127,8 +127,9 @@ class TestShellExecutor:
     async def test_empty_command(self, executor):
         result = await executor.run("", timeout=5.0)
 
-        assert result["status"] == "error"
-        assert "no command is running" in result["error"].lower()
+        assert result["status"] == "idle"
+        assert "no command is running" in result["content"].lower()
+        assert "error" not in result
 
     @pytest.mark.asyncio
     async def test_input_mode(self, executor):

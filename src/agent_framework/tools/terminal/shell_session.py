@@ -158,9 +158,21 @@ class ShellExecutor:
                 }
 
         if is_wait_command and not is_input:
+            # An empty command is the documented poll for a command that
+            # returned `status: running`. When nothing is running there is no
+            # failure to report -- the answer is simply that the session is
+            # idle. This used to return `status: error`, which callers counted
+            # as a failed action; a model that had just lost its arguments to a
+            # malformed call would send an empty call, get this "error", and
+            # then have its next (still empty) call suppressed as an exact
+            # repeat of a failure, latched forever. Report the idle state
+            # rather than replaying a previous command's buffer, which would
+            # read as fresh output for a command that is not running.
             return {
-                "error": "No command is running in this terminal session",
-                "status": "error",
+                "content": "No command is running in this terminal session",
+                "status": "idle",
+                "exit_code": 0,
+                "working_dir": self.work_dir,
                 "terminal_id": self.id,
             }
 
