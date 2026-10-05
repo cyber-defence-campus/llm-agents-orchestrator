@@ -144,15 +144,20 @@ def openrouter_routing() -> dict[str, Any] | None:
     flip. Pinning also keeps prompt caching effective, since a cache lives
     with one provider.
     """
-    order = os.getenv("OPENROUTER_PROVIDER_ORDER", "").strip()
-    if not order:
-        return None
-    providers = [p.strip() for p in order.split(",") if p.strip()]
-    if not providers:
-        return None
     allow_fallbacks = os.getenv(
         "OPENROUTER_ALLOW_FALLBACKS", "false").lower() in ("1", "true", "yes")
-    return {"order": providers, "allow_fallbacks": allow_fallbacks}
+    order = os.getenv("OPENROUTER_PROVIDER_ORDER", "").strip()
+    providers = [p.strip() for p in order.split(",") if p.strip()]
+    if providers:
+        return {"order": providers, "allow_fallbacks": allow_fallbacks}
+    # A provider pin can name one the account is not allowed to use at all --
+    # OpenRouter then removes it, and with fallbacks off every request 404s
+    # ("Filter by Guardrails removed deepseek"). Sorting by throughput instead
+    # picks the fastest *allowed* upstream, which is what the pin was for.
+    sort = os.getenv("OPENROUTER_SORT", "").strip()
+    if sort:
+        return {"sort": sort, "allow_fallbacks": allow_fallbacks}
+    return None
 
 
 def _native_tool_invocations(response: ModelResponse) -> list[dict[str, Any]]:
@@ -747,9 +752,14 @@ class LLM:
         if tools:
             completion_args["tools"] = tools
             completion_args["tool_choice"] = "auto"
-        elif self._should_include_stop_param():
-            # Only meaningful for the XML protocol, and actively harmful with
-            # native tools: it truncates on a tag the model no longer emits.
+        if self._should_include_stop_param():
+            # A model that answers in the XML protocol rather than with native
+            # tool_calls repeats the closing tag until it spends the whole
+            # output budget (observed on deepseek-v4.1-flash: 8192 tokens of
+            # `</function>` per turn, which then bloats every later request).
+            # The stop cuts that at the end of the first call. A native
+            # tool_calls answer carries the call outside `content`, so the
+            # stop cannot truncate it.
             completion_args["stop"] = ["</function>"]
 
         effort = self.config.reasoning_effort
@@ -782,22 +792,56 @@ class LLM:
         # long campaign survive upstream bursts.
         attempts = max(1, int(os.getenv("AGENT_LLM_RETRIES", "6")))
         base_delay = float(os.getenv("AGENT_LLM_RETRY_BASE_DELAY", "20"))
+        # The provider's own timeout (`request_timeout`) is not enough: a
+        # gateway that trickles keepalives keeps the read alive forever, and
+        # one 2-hour stalled request froze a whole campaign because the driver
+        # waits on this call. This is the hard bound that turns a stall into a
+        # retry and, after the attempts are spent, into an error the run can
+        # report instead of hanging on.
+        hard_timeout = float(os.getenv(
+            "AGENT_LLM_HARD_TIMEOUT", str(self.config.request_timeout + 120)))
+        logger.info(
+            f"LLM request for {self.agent_name}: hard timeout "
+            f"{hard_timeout:.0f}s, up to {attempts} attempts")
         response = None
         for attempt in range(attempts):
-            try:
-                response = await self.queue.make_request(completion_args)
-                break
-            except (litellm.RateLimitError,
-                    litellm.APIConnectionError,
-                    litellm.InternalServerError) as error:
+            # `asyncio.wait` rather than `wait_for`: litellm's provider call
+            # can swallow the cancellation `wait_for` relies on, which is how
+            # one request held an agent for hours despite a timeout. `wait`
+            # returns control on its own timer whatever the inner coroutine
+            # does; the timed-out task is cancelled and left to drain.
+            request_task = asyncio.ensure_future(
+                self.queue.make_request(completion_args))
+            request_task.add_done_callback(
+                lambda task: task.exception() if not task.cancelled() else None)
+            done, _ = await asyncio.wait({request_task}, timeout=hard_timeout)
+            if request_task in done:
+                try:
+                    response = request_task.result()
+                    break
+                except (litellm.RateLimitError,
+                        litellm.APIConnectionError,
+                        litellm.InternalServerError) as error:
+                    if attempt >= attempts - 1:
+                        raise
+                    delay = min(base_delay * (2 ** attempt), 120.0)
+                    logger.warning(
+                        f"LLM attempt {attempt + 1}/{attempts} rate-limited or "
+                        f"unreachable for {self.agent_name}: backing off "
+                        f"{delay:.0f}s ({type(error).__name__})")
+                    await asyncio.sleep(delay)
+                    continue
+            else:
+                request_task.cancel()
                 if attempt >= attempts - 1:
-                    raise
+                    raise RuntimeError(
+                        f"LLM request exceeded the hard timeout of "
+                        f"{hard_timeout:.0f}s for {self.agent_name}")
                 delay = min(base_delay * (2 ** attempt), 120.0)
                 logger.warning(
-                    f"LLM attempt {attempt + 1}/{attempts} rate-limited or "
-                    f"unreachable for {self.agent_name}: backing off "
-                    f"{delay:.0f}s ({type(error).__name__})"
-                )
+                    f"LLM attempt {attempt + 1}/{attempts} exceeded "
+                    f"{hard_timeout:.0f}s for {self.agent_name}: backing off "
+                    f"{delay:.0f}s (stalled provider)")
                 await asyncio.sleep(delay)
 
         self._total_stats.requests += 1

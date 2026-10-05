@@ -113,6 +113,40 @@ class TestReasoningToolExtraction:
             "args": {"command": "printf ok", "timeout": "20"},
         }]
 
+    def test_recovers_deepseek_dsml_invoke_envelope(self):
+        """DeepSeek emits its DSML envelope as text, name in an attribute.
+
+        Without this the call is prose, the transcript answers "No tool call was
+        recognized", and the agent retries the same spelling until it gives up.
+        """
+        content = (
+            "<\uff5cDSML\uff5c invoke name=\"delete_finding\">\n"
+            "<parameter name=\"finding_ids\">[\"service_x\"]</parameter>\n"
+            "</function>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [
+            {"toolName": "delete_finding", "args": {"finding_ids": "[\"service_x\"]"}}
+        ]
+
+    def test_recovers_deepseek_dsml_tagged_parameters(self):
+        content = (
+            "<\uff5cDSML\uff5cfunction_calls>\n"
+            "<\uff5cDSML\uff5cinvoke name=\"report_finding\">\n"
+            "<\uff5cDSML\uff5cparameter name=\"label\">x</\uff5cDSML\uff5cparameter>\n"
+            "<\uff5cDSML\uff5cparameter name=\"score\">8</\uff5cDSML\uff5cparameter>\n"
+            "</\uff5cDSML\uff5cinvoke>\n"
+            "</\uff5cDSML\uff5cfunction_calls>"
+        )
+
+        calls = parse_tool_invocations(content)
+
+        assert calls == [
+            {"toolName": "report_finding", "args": {"label": "x", "score": "8"}}
+        ]
+
     @pytest.mark.asyncio
     async def test_tool_in_reasoning_content_only(self, llm_instance, mock_queue):
         """

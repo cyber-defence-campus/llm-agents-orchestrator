@@ -44,6 +44,25 @@ class LLMConfig(BaseModel):
                 if env_val is not None:
                     data["batching_enabled"] = env_val.lower() in ("true", "1", "yes")
 
+            # Throughput knobs. Both were hardcoded defaults (6 and 1.0s), which
+            # put a hard ceiling on a deployment whose endpoint can serve far
+            # more -- no code edit should be needed to raise it.
+            if "max_concurrent" not in data:
+                env_val = os.getenv("LLM_MAX_CONCURRENT")
+                if env_val is not None:
+                    try:
+                        data["max_concurrent"] = max(1, int(env_val))
+                    except ValueError:
+                        pass
+
+            if "delay_between_requests" not in data:
+                env_val = os.getenv("LLM_DELAY_BETWEEN_REQUESTS")
+                if env_val is not None:
+                    try:
+                        data["delay_between_requests"] = max(0.0, float(env_val))
+                    except ValueError:
+                        pass
+
             if "batch_size" not in data:
                 env_val = os.getenv("LLM_BATCH_SIZE")
                 if env_val is not None:

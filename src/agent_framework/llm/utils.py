@@ -108,12 +108,48 @@ CALL_TAG_PATTERN = re.compile(
 # DeepSeek's own special-token markup (full-width `｜`) leaking into plain text ahead of the tag.
 SPECIAL_TOKEN_PREFIX_PATTERN = re.compile(r"<｜[^｜<>\n]+｜(?=function=)")
 
+# DeepSeek also emits its native DSML tool-call envelope as text instead of as
+# parsed tool_calls. The name lives in an `invoke name=` attribute and the
+# parameters may carry the special token themselves, so none of the `<function=`
+# patterns above ever see it. A real call (delete_finding is registered) was
+# read as prose, the transcript answered "No tool call was recognized", and the
+# agent retried the same spelling until it gave up. Normalize the envelope to
+# the XML shape the rest of the parser already understands. The token is
+# rendered with full-width bars and, once de-tokenized, can appear with ASCII
+# bars or doubled, so match either bar and any run length.
+_DSML_BAR = r"[｜|]+"
+DSML_INVOKE_OPEN_PATTERN = re.compile(
+    rf"<{_DSML_BAR}DSML{_DSML_BAR}\s*invoke\s+name=[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*>",
+    re.IGNORECASE,
+)
+DSML_PARAM_OPEN_PATTERN = re.compile(
+    rf"<{_DSML_BAR}DSML{_DSML_BAR}\s*parameter\s+name=[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*>",
+    re.IGNORECASE,
+)
+DSML_INVOKE_CLOSE_PATTERN = re.compile(
+    rf"</{_DSML_BAR}DSML{_DSML_BAR}\s*invoke\s*>", re.IGNORECASE
+)
+DSML_PARAM_CLOSE_PATTERN = re.compile(
+    rf"</{_DSML_BAR}DSML{_DSML_BAR}\s*parameter\s*>", re.IGNORECASE
+)
+DSML_WRAPPER_PATTERN = re.compile(
+    rf"</?{_DSML_BAR}DSML{_DSML_BAR}\s*(?:function_calls|tool_calls)\s*>", re.IGNORECASE
+)
+
 
 def _normalize_xml_tags(text: str) -> str:
     def normalize_parameter(match: re.Match[str]) -> str:
         key = match.group(1)
         value = match.group(2)
         return f"<parameter={key}>{value}</parameter>"
+
+    # DeepSeek's DSML envelope first: it carries the tool name in an attribute
+    # rather than in the tag, so every pattern below would miss it.
+    text = DSML_WRAPPER_PATTERN.sub("", text)
+    text = DSML_PARAM_CLOSE_PATTERN.sub("</parameter>", text)
+    text = DSML_INVOKE_CLOSE_PATTERN.sub("</function>", text)
+    text = DSML_INVOKE_OPEN_PATTERN.sub(r"<function=\1>", text)
+    text = DSML_PARAM_OPEN_PATTERN.sub(r"<parameter=\1>", text)
 
     # Do this before function extraction: the malformed envelope can contain
     # a literal ``>`` only after the gateway's closing arg-key marker, so it
