@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tools>
+  <tool name="audit_observe">
+    <description>Read authorized documents through the native ABS signed readonly plan interface.</description>
+    <details>Only available to the signed-plan native arms. A single-document interface reads one document per call; a plan interface reads up to its permitted count in one plan. Values returned are the original source values.</details>
+    <parameters>
+      <parameter=documents type="string" required="true">
+        <description>JSON array of document IDs from your assigned partition, e.g. ["I1","I2","I3"]. A single mode permits one; plan mode up to three.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Per-document facts and opaque receipts, or an error.</description>
+    </returns>
+  </tool>
+
+  <tool name="audit_receive">
+    <description>Receive a bounded chunk of original facts and questions.</description>
+    <details>Repeat while the response's remaining_messages is positive. Questions arrive as messages to answer with audit_publish.</details>
+    <returns type="Dict[str, Any]">
+      <description>Received facts and questions, with a remaining count.</description>
+    </returns>
+  </tool>
+
+  <tool name="audit_publish">
+    <description>Deliver selected received source facts, or a clarification, to another native role.</description>
+    <details>Refs must be exact fact IDs you actually received; their values stay the original source values. Use the receipts returned by audit_observe.</details>
+    <parameters>
+      <parameter=recipient type="string" required="true">
+        <description>Target role: inventory, events, requirements or integration.</description>
+      </parameter>
+      <parameter=refs type="string" required="false">
+        <description>JSON array of at most 80 exact fact IDs actually received.</description>
+      </parameter>
+      <parameter=receipts type="string" required="false">
+        <description>JSON array of opaque receipts returned by your document reads; use [] for previously acknowledged evidence.</description>
+      </parameter>
+      <parameter=question type="string" required="false">
+        <description>An optional question, or a concise interpretation of the selected evidence.</description>
+      </parameter>
+      <parameter=reply_to type="string" required="false">
+        <description>Original message ID when answering a question; otherwise omit.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Delivery status.</description>
+    </returns>
+  </tool>
+
+  <tool name="audit_submit">
+    <description>Submit the joint report for all assigned components to Arena's independent evaluator.</description>
+    <parameters>
+      <parameter=report type="string" required="true">
+        <description>JSON object with findings, unresolved_findings and notes. Each finding includes component, check, classification, assessment_tick and its typed proof.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Evaluation result; on pass the agent is marked complete.</description>
+    </returns>
+  </tool>
+</tools>
