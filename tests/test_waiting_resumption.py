@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from agent_framework.agents.base import BaseAgent
 from agent_framework.llm.types import LLMResponse
 
