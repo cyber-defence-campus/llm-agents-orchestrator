@@ -17,7 +17,7 @@ async def test_forward_annotations_and_real_agent_ids_reach_remote_abs(monkeypat
     node=importlib.util.module_from_spec(spec);monkeypatch.setitem(sys.modules,spec.name,node);spec.loader.exec_module(node)
     node.ROOT=tmp_path;node.ADMIN='test-control'
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=node.app),base_url='http://test-node') as client:
-        response=await client.post('/runs',json={'run_id':'transport-test','arm':'intents-plan','seed':10},headers={'X-Audit-Key':'test-control'})
+        response=await client.post('/runs',json={'run_id':'transport-test','arm':'intents-plan','interface':{'transport':'signed-plan','max_documents':3},'seed':10},headers={'X-Audit-Key':'test-control'})
         tokens=response.json()['role_tokens']
         async def call(state,path,body=None):
             contract=actions.contract(state)
