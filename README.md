@@ -1,6 +1,6 @@
 # 🤖 Agent Orchestrator
 
-> A powerful, service for orchestrating LLM-powered autonomous agents.
+> A powerful service for orchestrating LLM-powered autonomous agents.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg) ![Docker](https://img.shields.io/badge/docker-enabled-blue.svg)
 
@@ -119,7 +119,7 @@ poetry run python cli.py
 
 The `sandbox-runtime` provides secure isolated environments for tool execution (Browser, Python, Terminal).
 
-> **Requirement:** The `sandbox-runtime` project must be present in the parent directory (sibling to `agent-orchestrator`) for the Docker build context.
+> **Requirement:** The `sandbox-runtime` project must be present in the parent directory (sibling to `llm-agents-orchestrator`) for the Docker build context.
 
 To enable full sandbox support:
 
@@ -151,7 +151,7 @@ make test
 ## 🏗️ Architecture
 
 ```
-agent-orchestrator/
+llm-agents-orchestrator/
 ├── main.py                 # FastAPI service entry point
 ├── src/
 │   └── agent_framework/    # Core agent library
