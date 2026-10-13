@@ -893,7 +893,7 @@ def remove_screenshot_from_result(result: Any) -> Any:
 
 
 def _format_tool_result(
-    tool_name: str, result: Any
+    tool_name: str, result: Any, max_chars: int = 10000
 ) -> tuple[str, list[dict[str, Any]]]:
     images: list[dict[str, Any]] = []
     result_for_llm: Any
@@ -936,7 +936,7 @@ def _format_tool_result(
     except TypeError:
         final_result_str = json.dumps(str(result_for_llm), indent=None)
 
-    max_len = 10000
+    max_len = max_chars
     if len(final_result_str) > max_len:
         start_part = final_result_str[: max_len // 2 - 50]
         end_part = final_result_str[-max_len // 2 + 50 :]
@@ -1152,7 +1152,9 @@ async def process_tool_invocations(
                     )
                     agent_state.set_waiting()
 
-        observation_xml, images = _format_tool_result(tool_name, result)
+        context = getattr(agent_state, 'context_data', None) or {}
+        native = context.get('native_audit', {}).get('kind') == 'arena-readonly-audit-v1'
+        observation_xml, images = _format_tool_result(tool_name, result, 65536 if native else 10000)
         observation_parts.append(observation_xml)
         all_images.extend(images)
 

@@ -1,7 +1,8 @@
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, List, Type, Union, get_args, get_origin
+from typing import Any, Callable, Dict, List, Type, Union, get_args, get_origin, get_type_hints
+from types import UnionType
 
 logger = logging.getLogger("agent.arg_parser")
 
@@ -14,6 +15,10 @@ class ArgumentParser:
     @staticmethod
     def parse(func: Callable, args: Dict[str, Any]) -> Dict[str, Any]:
         sig = inspect.signature(func)
+        try:
+            hints = get_type_hints(func)
+        except (NameError, TypeError):
+            hints = {}
         parsed = {}
 
         for name, val in args.items():
@@ -22,7 +27,7 @@ class ArgumentParser:
                 continue
 
             param = sig.parameters[name]
-            target_type = param.annotation
+            target_type = hints.get(name, param.annotation)
 
             if target_type == inspect.Parameter.empty or val is None:
                 parsed[name] = val
@@ -44,7 +49,7 @@ class ArgumentParser:
         origin = get_origin(target)
         t_args = get_args(target)
 
-        if origin is Union:
+        if origin in (Union, UnionType):
             for t in t_args:
                 if t is type(None):
                     continue

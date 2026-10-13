@@ -9,6 +9,10 @@ class LLMConfig(BaseModel):
     api_base: str | None = None
     reasoning_effort: str | None = None
     temperature: float | None = None
+    max_output_tokens: int = Field(default=8192,ge=1,le=65536)
+    seed: int | None = None
+    openrouter_provider_order: list[str] | None = None
+    openrouter_allow_fallbacks: bool | None = None
     enable_prompt_caching: bool = True
     prompt_modules: list[str] = Field(default_factory=list)
     max_concurrent: int = 6

@@ -147,6 +147,10 @@ class BaseAgent:
             db.set_root_agent_id(self.context.agent_id)
 
     async def start_lifecycle(self, primary_task: str) -> Dict[str, Any]:
+        native = self.context.context_data.get('native_audit') or {}
+        if native.get('kind') == 'arena-readonly-audit-v1' and 'native_wait_deadline_at' not in self.context.context_data:
+            # Trusted lifecycle time, fixed once: notifications cannot renew it.
+            self.context.context_data['native_wait_deadline_at'] = datetime.now(UTC).timestamp() + 600
         await self._initialize_task(primary_task)
         self.context.status = "running"
         self._persist_state()
@@ -156,6 +160,8 @@ class BaseAgent:
         try:
             while not self.context.should_terminate():
                 if self._is_stop_requested():
+                    break
+                if self._native_deadline_expired():
                     break
 
                 await self._check_messages()
@@ -173,7 +179,8 @@ class BaseAgent:
                 try:
                     is_done = await self._execute_cycle()
                     if is_done:
-                        self.context.mark_completed()
+                        if not self.context.completed:
+                            self.context.mark_completed()
                         break
 
                 except Exception as ex:
@@ -183,15 +190,26 @@ class BaseAgent:
 
                 self._persist_state()
 
+        except asyncio.CancelledError:
+            native = self.context.context_data.get('native_audit') or {}
+            if native.get('kind') == 'arena-readonly-audit-v1':
+                self.context.context_data['native_lifecycle_cancelled'] = True
+                self.context.signal_stop()
+            raise
         finally:
             monitor_task.cancel()
+            self._end_native_wait('report_accepted' if self.context.completed else 'iteration_limit' if self.context.iteration >= self.context.max_iterations else 'stop_request' if self.context.stop_requested else 'lifecycle_exit')
             final_status = "stopped" if not self.context.completed else "completed"
             if final_status == "stopped":
                 # Say why. An agent that exits without completing was recorded
                 # only as "stopped" with an empty error, so a run that lost a
                 # working child looked identical to one that was told to stop,
                 # and the reason had to be reconstructed from log archaeology.
-                if self.context.iteration >= self.context.max_iterations:
+                if self.context.context_data.get('native_wait_deadline_expired'):
+                    reason = 'native audit run deadline reached'
+                elif self.context.context_data.get('native_lifecycle_cancelled'):
+                    reason = 'native audit task cancelled'
+                elif self.context.iteration >= self.context.max_iterations:
                     reason = (
                         f"iteration ceiling reached "
                         f"({self.context.iteration}/{self.context.max_iterations})"
@@ -310,8 +328,12 @@ class BaseAgent:
         for msg in inbox:
             if msg.get("type") == "control":
                 if msg.get("content") == "stop":
+                    self._end_native_wait('stop_request')
                     self.context.signal_stop()
             else:
+                native = self.context.context_data.get('native_audit') or {}
+                if native.get('kind') == 'arena-readonly-audit-v1' and self.context.should_terminate():
+                    continue
                 sender = msg.get("from", "unknown")
                 body = msg.get("content", "")
                 formatted = (
@@ -341,6 +363,7 @@ class BaseAgent:
                     memory["autonomous_wait_count"] = 0
 
                 if self.context.waiting_for_input:
+                    self._end_native_wait('notification')
                     self.context.resume()
                     self.context.status = "running"
                     db.update_agent_status(self.context.agent_id, "running")
@@ -354,6 +377,7 @@ class BaseAgent:
     def _is_stop_requested(self) -> bool:
         status = db.get_agent_status(self.context.agent_id)
         if status == "stopping":
+            self._end_native_wait('stop_request')
             self.context.signal_stop()
             return True
         return False
@@ -384,7 +408,41 @@ class BaseAgent:
                     self._active_tool_task.cancel()
                 break
 
+    def _end_native_wait(self, reason):
+        native = self.context.context_data.get('native_audit') or {}
+        if native.get('kind') == 'arena-readonly-audit-v1' and self.context.waiting_for_input:
+            from agent_framework.runtime.native_audit_lifecycle import record_wait
+            record_wait(self.context,'wait.end',reason)
+            # Clearing a wait must never clear stop_requested or completed.
+            self.context.waiting_for_input = False
+            self.context.waiting_since = None
+            self.context.wait_timeout = None
+            self.context.touch()
+
+    def _native_deadline_expired(self):
+        native = self.context.context_data.get('native_audit') or {}
+        if native.get('kind') != 'arena-readonly-audit-v1':
+            return False
+        deadline = self.context.context_data.get('native_wait_deadline_at')
+        remaining = deadline - datetime.now(UTC).timestamp() if isinstance(deadline, (int, float)) else 0
+        if not 0 < remaining <= 600:
+            self.context.context_data['native_wait_deadline_expired'] = True
+            self._end_native_wait('run_deadline')
+            self.context.signal_stop()
+            return True
+        return False
+
     async def _wait_cycle(self):
+        native = self.context.context_data.get('native_audit') or {}
+        if native.get('kind') == 'arena-readonly-audit-v1' and native.get('waiting_policy') == 'message_driven':
+            deadline = self.context.context_data.get('native_wait_deadline_at')
+            now = datetime.now(UTC).timestamp()
+            if self._native_deadline_expired():
+                return
+            # _check_messages and _watch_status still run. Idle timer ticks do
+            # not resume reasoning or consume another model iteration.
+            await asyncio.sleep(min(1.0, deadline - now))
+            return
         # A legacy waiting state may have no timeout because older versions
         # accepted None. Convert it here as well as in enter_wait_mode so a
         # restored agent cannot remain parked forever.
@@ -396,6 +454,7 @@ class BaseAgent:
         elapsed = (datetime.now(UTC) - self.context.waiting_since).total_seconds()
         remaining = self.context.wait_timeout - elapsed
         if remaining <= 0:
+            self._end_native_wait('timer_expired')
             self.context.resume()
             self.context.status = "running"
             db.update_agent_status(self.context.agent_id, "running")

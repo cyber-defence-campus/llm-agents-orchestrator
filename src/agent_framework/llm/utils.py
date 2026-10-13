@@ -8,6 +8,9 @@ TOOL_CALL_PATTERN = re.compile(
 PARAM_PATTERN = re.compile(
     r"<parameter(?:=|\s+name=)[\"']?([\w.\-]+)[\"']?>(.*?)</parameter>", re.DOTALL
 )
+NAMED_PARAM_PATTERN = re.compile(
+    r"<([A-Za-z_][\w.\-]*)>(.*?)</\1>", re.DOTALL
+)
 # No `=`/`name=` on the tag at all -- key=value sits in the body instead.
 BARE_PARAM_PATTERN = re.compile(
     r"<parameter>\s*([A-Za-z_][\w.\-]*)=(.*?)</parameter>", re.DOTALL
@@ -90,6 +93,25 @@ def parse_tool_invocations(content: str) -> Optional[List[Dict[str, Any]]]:
                 key = param.group(1).strip()
                 if key not in args:
                     args[key] = html.unescape(param.group(2).strip())
+
+        # A native audit trace used flat named children such as <recipient>
+        # and <refs>. Dispatching an empty call discarded otherwise complete
+        # evidence publications until the integrator exhausted its budget.
+        # Recover only a complete, unambiguous flat argument body. Text outside
+        # these children, duplicates and mixed parameter dialects remain invalid.
+        if not args and '<parameter' not in body:
+            children = list(NAMED_PARAM_PATTERN.finditer(body))
+            cursor = 0
+            candidate = {}
+            for child in children:
+                key = child.group(1)
+                if body[cursor:child.start()].strip() or key in candidate:
+                    candidate = {}
+                    break
+                candidate[key] = html.unescape(child.group(2).strip())
+                cursor = child.end()
+            if candidate and not body[cursor:].strip():
+                args = candidate
 
         invocations.append({"toolName": tool_name, "args": args})
 

@@ -1,9 +1,12 @@
 import asyncio
+import hashlib
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
 from typing import Any
+from pathlib import Path
+from uuid import uuid4
 
 _script_dir = os.path.dirname(__file__)
 _extensions_path = os.path.abspath(os.path.join(_script_dir, ".."))
@@ -25,6 +28,8 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 active_agents: dict[str, dict[str, Any]] = {}
+MANAGER_INSTANCE_ID = uuid4().hex
+STOP_WAIT_SECONDS = 2.0
 
 
 class AgentCreationRequest(BaseModel):
@@ -88,6 +93,29 @@ app = FastAPI(
     description="Manages the lifecycle of LLM agents. Can run standalone or be extended.",
     lifespan=lifespan,
 )
+
+
+@app.get('/task-implementation')
+async def task_implementation():
+    source = Path(__file__).read_text()
+    return {'instance_id': MANAGER_INSTANCE_ID, 'files': {
+        'manager/main': {'name': 'main.py', 'text': source,
+                         'sha256': hashlib.sha256(source.encode()).hexdigest()}}}
+
+
+@app.get('/tasks/{agent_id}/status')
+async def task_status(agent_id: str):
+    """Current single-process task ownership, independent of persisted graph state."""
+    data = active_agents.get(agent_id)
+    task = data.get('task') if data else None
+    status = 'absent'
+    if task is not None:
+        status = 'running'
+        if task.done():
+            status = 'cancelled' if task.cancelled() else 'error' if task.exception() else 'finished'
+    return {'agent_id': agent_id, 'instance_id': MANAGER_INSTANCE_ID,
+            'scope': 'single-manager-process', 'task_state': status,
+            'task_active': task is not None and not task.done()}
 
 
 async def run_agent(agent: DefaultAgent, agent_state: AgentContext):
@@ -274,18 +302,19 @@ async def stop_agent(agent_id: str):
 
     if not task.done():
         task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
-        except Exception as e:
-            logger.error(f"Error during forced stop of agent {agent_id}: {e}")
+        # wait_for can exceed its timeout when a task suppresses cancellation.
+        # Keep ownership visible until the task actually terminates.
+        await asyncio.wait({task}, timeout=STOP_WAIT_SECONDS)
+
+    if not task.done():
+        return {'message': f'Stop requested for agent {agent_id}; task remains active.',
+                'task_active': True}
 
     if agent_id in active_agents:
         del active_agents[agent_id]
         logger.info(f"Agent {agent_id} removed from active list.")
 
-    return {"message": f"Agent {agent_id} stopped successfully."}
+    return {"message": f"Agent {agent_id} stopped successfully.", 'task_active': False}
 
 
 @app.post("/agents/{agent_id}/capabilities", status_code=200)
@@ -320,6 +349,8 @@ async def delete_agent(agent_id: str):
     """
     if agent_id in active_agents:
         await stop_agent(agent_id)
+        if agent_id in active_agents and not active_agents[agent_id]['task'].done():
+            raise HTTPException(409, 'Agent task remains active; deletion is unconfirmed')
 
     try:
         state_manager.delete_agent(agent_id)

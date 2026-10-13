@@ -24,6 +24,7 @@ SANDBOX_MODE = os.getenv("AGENT_SANDBOX_MODE", "false").lower() == "true"
 
 from .agent_management import *  # noqa: F403
 from .terminal import *  # noqa: F403
+from .native_audit.actions import audit_observe, audit_publish, audit_receive, audit_submit
 
 from .loader import load_external_tools
 

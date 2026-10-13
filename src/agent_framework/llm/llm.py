@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import os
+import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any
 
@@ -212,6 +214,7 @@ class LLM:
         self.job_id = None
         self.agent_id = None
         self.capabilities = None
+        self.native_audit = (agent_state.context_data or {}).get("native_audit") if agent_state else None
         self._xml_capability_state: tuple[str, ...] = ()
         if agent_state and agent_state.sandbox_info:
             self.job_id = agent_state.sandbox_info.get("job_id")
@@ -736,7 +739,7 @@ class LLM:
             "messages": messages,
             "timeout": self.config.request_timeout,
             "metadata": {"job_id": self.job_id},
-            "max_tokens": 8192,
+            "max_tokens": self.config.max_output_tokens,
             "headers": {},
         }
 
@@ -779,8 +782,14 @@ class LLM:
             else:
                 completion_args["reasoning_effort"] = effort
 
-        if provider == "openrouter" and (routing := openrouter_routing()):
-            completion_args.setdefault("extra_body", {})["provider"] = routing
+        if provider == "openrouter":
+            routing = ({"order": self.config.openrouter_provider_order,
+                        "allow_fallbacks": self.config.openrouter_allow_fallbacks is True}
+                       if self.config.openrouter_provider_order is not None else openrouter_routing())
+            if routing:
+                completion_args.setdefault("extra_body", {})["provider"] = routing
+        if self.config.seed is not None:
+            completion_args["seed"] = self.config.seed
 
         logger.debug(
             f"Completion Args for LiteLLM (Agent: {self.agent_name}): {completion_args}"
@@ -811,7 +820,7 @@ class LLM:
             # returns control on its own timer whatever the inner coroutine
             # does; the timed-out task is cancelled and left to drain.
             request_task = asyncio.ensure_future(
-                self.queue.make_request(completion_args))
+                self._tracked_request(completion_args))
             request_task.add_done_callback(
                 lambda task: task.exception() if not task.cancelled() else None)
             done, _ = await asyncio.wait({request_task}, timeout=hard_timeout)
@@ -851,6 +860,35 @@ class LLM:
             f"Raw LiteLLM Response Object (Agent: {self.agent_name}): {response}"
         )
 
+        return response
+
+    async def _tracked_request(self, completion_args):
+        """Persist actual provider wait intervals for native Arena jobs only."""
+        if not self.native_audit:
+            return await self.queue.make_request(completion_args)
+        request_id = uuid4().hex
+        started = time.time()
+        def record(stage, **extra):
+            event = {"kind": stage, "request_id": request_id, "timestamp": time.time(),
+                     "agent_id": self.agent_id, "role": self.native_audit["role"],
+                     "model": self.config.model_name, **extra}
+            try:
+                state_manager.redis_client.rpush("native-audit:model:" + self.job_id, json.dumps(event))
+            except Exception:
+                logger.warning("Native model activity could not be persisted")
+        record("model.request")
+        try:
+            response = await self.queue.make_request(completion_args)
+        except BaseException as error:
+            record("model.error", error=type(error).__name__, duration_seconds=time.time() - started)
+            raise
+        usage = getattr(response, "usage", None)
+        choice=next(iter(getattr(response,"choices",[]) or []),None)
+        record("model.response", duration_seconds=time.time() - started,
+               finish_reason=getattr(choice,"finish_reason",None),
+               response_model=getattr(response, "model", None),
+               input_tokens=getattr(usage, "prompt_tokens", None),
+               output_tokens=getattr(usage, "completion_tokens", None), cost=_reported_cost(response))
         return response
 
 

@@ -333,10 +333,17 @@ def enter_wait_mode(
             requested = min(requested, AUTONOMOUS_COORDINATOR_WAIT_SECONDS)
         bounded = max(1, min(requested, MAX_WAIT_SECONDS))
         agent_state.set_waiting(timeout=bounded)
+        from agent_framework.runtime.native_audit_lifecycle import record_wait
+        record_wait(agent_state,'wait.enter')
         db.update_agent_status(agent_id, "waiting")
         db.update_agent_node_fields(agent_id, {"wait_reason": wait_reason})
-        return {"status": "paused", "mode": "waiting",
-                "max_wait_seconds": bounded}
+        result = {"status": "paused", "mode": "waiting", "max_wait_seconds": bounded}
+        native = context.get('native_audit') or {}
+        if native.get('kind') == 'arena-readonly-audit-v1' and native.get('waiting_policy') == 'message_driven':
+            result.update(waiting_policy='message_driven', idle_check_seconds=bounded,
+                          resume_condition='message, stop request or fixed native run deadline')
+            result.pop('max_wait_seconds')
+        return result
     except Exception as e:
         return {"status": "error", "details": str(e)}
 
