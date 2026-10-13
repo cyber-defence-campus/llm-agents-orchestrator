@@ -1,5 +1,11 @@
 .PHONY: help install dev-install run run-with-sandbox run-local stop test logs clean create-agent
 
+# Some tests reach across repositories: `benchmarks` and `abs` live in ../abs,
+# `console_api` comes from arena-sensors (NOT intents' console_api -- an earlier
+# one on the path shadows it) and `cyd_sensors` comes from cyd-sensors. The
+# order below is load-bearing.
+TEST_PYTHONPATH := src:$(abspath ../abs):$(abspath ../abs/src):$(abspath ../arena/cyd-sensors-and-algorithms/src):$(abspath ../arena/arena-sensors-and-algorithms/src)
+
 help:
 	@echo "Agent Orchestrator - Standalone Development Commands"
 	@echo ""
@@ -75,13 +81,13 @@ run-local:
 # from minutes to well under a minute. `test-serial` is kept for the rare case
 # where a failure needs a readable, ordered transcript.
 test:
-	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -n auto
+	export PYTHONPATH=$$PYTHONPATH:$(TEST_PYTHONPATH) && poetry run pytest tests/ -n auto
 
 test-serial:
-	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -v
+	export PYTHONPATH=$$PYTHONPATH:$(TEST_PYTHONPATH) && poetry run pytest tests/ -v
 
 test-cov:
-	export PYTHONPATH=$$PYTHONPATH:$$(pwd)/src && poetry run pytest tests/ -n auto --cov=agent_framework --cov-report=term-missing
+	export PYTHONPATH=$$PYTHONPATH:$(TEST_PYTHONPATH) && poetry run pytest tests/ -n auto --cov=agent_framework --cov-report=term-missing
 
 # Example: Create a simple test agent
 create-agent:
