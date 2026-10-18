@@ -96,7 +96,7 @@ create-agent:
 		-H "Content-Type: application/json" \
 		-d '{ \
 			"agent_config": { \
-				"llm_config": {"model": "$${AGENT_MODEL:-openrouter/deepseek/deepseek-v4.1-flash}"}, \
+				"llm_config": {"model": "$${AGENT_MODEL:-openrouter/deepseek/deepseek-v4.1-flash-1017}"}, \
 				"state": { \
 					"agent_id": "test-$$(date +%s)", \
 					"task": "This is a test. Simply respond with: Test successful!" \

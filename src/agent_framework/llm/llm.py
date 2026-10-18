@@ -37,6 +37,16 @@ _DEEPSEEK_V41_FLASH_PRICES = {
     "litellm_provider": "openrouter",
     "mode": "chat",
 }
+# The 17 October 2026 snapshot of V4.1 Flash, listed at $0.15/$0.60 per M
+# with cache reads at $0.003 per M. Registered under its own name so a
+# dated run is priced by its own snapshot rather than by the name it dates.
+_DEEPSEEK_V41_FLASH_1017_PRICES = {
+    "input_cost_per_token": 0.15e-6,
+    "output_cost_per_token": 0.60e-6,
+    "cache_read_input_token_cost": 0.003e-6,
+    "litellm_provider": "openrouter",
+    "mode": "chat",
+}
 def _reported_cost(response) -> float | None:
     """Cost the provider itself reported, if any.
 
@@ -78,6 +88,7 @@ try:
         ("deepseek-v4-flash-0731", _DEEPSEEK_V4_PRICES, "deepseek"),
         ("deepseek-v4-pro", _DEEPSEEK_V4_PRO_PRICES, "deepseek"),
         ("deepseek-v4.1-flash", _DEEPSEEK_V41_FLASH_PRICES, "deepseek"),
+        ("deepseek-v4.1-flash-1017", _DEEPSEEK_V41_FLASH_1017_PRICES, "deepseek"),
     ):
         registry.update(_price_variants(_base, _prices, _provider))
     litellm.register_model(registry)

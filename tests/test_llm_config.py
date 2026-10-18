@@ -8,7 +8,7 @@ def test_config_never_logs_api_keys(monkeypatch, caplog):
     monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
 
     with caplog.at_level(logging.INFO):
-        LLMConfig(model_name="openrouter/deepseek/deepseek-v4.1-flash")
+        LLMConfig(model_name="openrouter/deepseek/deepseek-v4.1-flash-1017")
 
     assert secret not in caplog.text
     assert "DEEPSEEK_API_KEY" not in caplog.text
