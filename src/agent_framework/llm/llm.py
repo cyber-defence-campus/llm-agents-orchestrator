@@ -161,16 +161,20 @@ def openrouter_routing() -> dict[str, Any] | None:
         "OPENROUTER_ALLOW_FALLBACKS", "false").lower() in ("1", "true", "yes")
     order = os.getenv("OPENROUTER_PROVIDER_ORDER", "").strip()
     providers = [p.strip() for p in order.split(",") if p.strip()]
+    allowed = [p.strip() for p in os.getenv("OPENROUTER_PROVIDER_ONLY", "").split(",") if p.strip()]
+    routing: dict[str, Any] = {"allow_fallbacks": allow_fallbacks}
+    if allowed:
+        routing["only"] = allowed
     if providers:
-        return {"order": providers, "allow_fallbacks": allow_fallbacks}
+        return {**routing, "order": providers}
     # A provider pin can name one the account is not allowed to use at all --
     # OpenRouter then removes it, and with fallbacks off every request 404s
     # ("Filter by Guardrails removed deepseek"). Sorting by throughput instead
     # picks the fastest *allowed* upstream, which is what the pin was for.
     sort = os.getenv("OPENROUTER_SORT", "").strip()
     if sort:
-        return {"sort": sort, "allow_fallbacks": allow_fallbacks}
-    return None
+        return {**routing, "sort": sort}
+    return routing if allowed else None
 
 
 def _native_tool_invocations(response: ModelResponse) -> list[dict[str, Any]]:
@@ -567,6 +571,8 @@ class LLM:
                 reasoning_content=reasoning_content,
             )
 
+        except LLMRequestFailedError:
+            raise
         except litellm.RateLimitError as e:
             raise LLMRequestFailedError(
                 "LLM request failed: Rate limit exceeded", str(e)

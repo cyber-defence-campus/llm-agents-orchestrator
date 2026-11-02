@@ -249,6 +249,8 @@ class BaseAgent:
             logger.warning(f"Generation failure: {e}")
             self.context.record_error(str(e))
             self.context.set_waiting(error_state=True)
+            self.context.status = "llm_failed"
+            db.update_agent_status(self.context.agent_id, "llm_failed", str(e))
             return False
 
         llm_content = response.content
@@ -433,6 +435,11 @@ class BaseAgent:
         return False
 
     async def _wait_cycle(self):
+        # A model failure needs an explicit resume after its cause is fixed.
+        # The normal idle timer must not silently retry a billing failure.
+        if self.context.llm_failed:
+            await asyncio.sleep(1.0)
+            return
         native = self.context.context_data.get('native_audit') or {}
         if native.get('kind') == 'arena-readonly-audit-v1' and native.get('waiting_policy') == 'message_driven':
             deadline = self.context.context_data.get('native_wait_deadline_at')

@@ -372,7 +372,7 @@ async def get_agent_status(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     task = active_agents[agent_id]["task"]
-    status = "running"
+    status = ("llm_failed" if active_agents[agent_id]["state"].llm_failed else "running")
     if task.done():
         if task.cancelled():
             status = "cancelled"

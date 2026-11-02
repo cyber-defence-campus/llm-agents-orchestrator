@@ -11,6 +11,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from tenacity.wait import wait_base
 
 from .config import LLMConfig
+from .types import LLMRequestFailedError
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,21 @@ class LLMRequestQueue:
                     )
                 await asyncio.sleep(sleep_needed)
 
-            response = await acompletion(**completion_args, stream=False)
+            try:
+                response = await acompletion(**completion_args, stream=False)
+            except Exception as error:
+                # Routers can wrap an upstream billing failure in HTTP 502.
+                # Retrying it as a transient outage only hides the real blocker.
+                message = str(error).lower()
+                if any(marker in message for marker in (
+                    "insufficient_balance_error", "insufficient balance",
+                    "insufficient credits", "credit balance is too low",
+                )):
+                    raise LLMRequestFailedError(
+                        "Model provider reports insufficient balance or credits. "
+                        "Check the selected provider route and billing; no automatic retry."
+                    ) from error
+                raise
         if isinstance(response, ModelResponse):
             return response
         self._raise_unexpected_response()
@@ -123,6 +138,8 @@ LLMRequestQueue._reliable_request.retry.wait = wait_respecting_quota(
 
 
 def should_retry_exception(exception: Exception) -> bool:
+    if isinstance(exception, LLMRequestFailedError):
+        return False
     error_msg = str(exception).lower()
     if (
         "unable to get json response" in error_msg

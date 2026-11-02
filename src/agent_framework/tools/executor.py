@@ -211,6 +211,11 @@ async def execute_tool(
     if error := _scope_error(tool_name, kwargs, agent_state):
         return error
 
+    from .operation_limits import claim_action
+    if not claim_action(agent_state, tool_name):
+        return {"error": "Operation stopped, paused or its time/action limit was reached.",
+                "type": "OperationLimitError"}
+
     requested = kwargs.get("exec_timeout")
     capped = None
     try:

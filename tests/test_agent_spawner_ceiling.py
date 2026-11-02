@@ -50,6 +50,8 @@ def _spawn(monkeypatch, parent_context, requested):
         parent_state=parent, name="child", task="go",
         prompt_modules=requested))
     assert result.get("success") is True, result
+    if parent_context.get("bounded_operation"):
+        assert captured["context"]["bounded_operation"] is True
     return captured["context"]["capabilities"]
 
 
@@ -76,3 +78,7 @@ def test_a_parent_with_no_contract_is_left_alone(monkeypatch):
     granted = _spawn(monkeypatch, {}, ["terminal"])
 
     assert "terminal" in granted
+
+
+def test_children_inherit_the_shared_operation_budget(monkeypatch):
+    _spawn(monkeypatch, {"bounded_operation": True}, ["terminal"])

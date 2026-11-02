@@ -145,6 +145,8 @@ async def spawn_agent(
                 if legacy_tool in tool_names:
                     child_tools.append(legacy_tool)
         child_context = {"capabilities": list(dict.fromkeys(child_tools))}
+        if parent_context.get("bounded_operation") is True:
+            child_context["bounded_operation"] = True
         if autonomous_no_wait:
             child_context["autonomous_no_wait"] = True
         if parent_context.get("scope"):
