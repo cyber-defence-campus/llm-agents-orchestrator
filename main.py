@@ -14,7 +14,7 @@ if os.path.isdir(os.path.join(_extensions_path, "rt_automation_tactics")):
     sys.path.insert(0, _extensions_path)
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent_framework.agents.default import DefaultAgent
 from agent_framework.agents.state import AgentContext
@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 active_agents: dict[str, dict[str, Any]] = {}
 MANAGER_INSTANCE_ID = uuid4().hex
 STOP_WAIT_SECONDS = 2.0
+
+from agent_framework.services.prepared_teams import PreparedTeams
+
+prepared_teams = PreparedTeams()
+prepared_campaign_parents: dict[str, dict] = {}
 
 
 class AgentCreationRequest(BaseModel):
@@ -101,6 +106,11 @@ async def task_implementation():
     return {'instance_id': MANAGER_INSTANCE_ID, 'files': {
         'manager/main': {'name': 'main.py', 'text': source,
                          'sha256': hashlib.sha256(source.encode()).hexdigest()}}}
+
+
+@app.get('/experiments/identity')
+async def experiment_identity():
+    return {'instance_id': MANAGER_INSTANCE_ID}
 
 
 @app.get('/tasks/{agent_id}/status')
@@ -218,9 +228,14 @@ def start_agent_task(
             f"Generated missing job_id for agent {agent_id}: {generated_job_id}"
         )
 
+    prepared_teams.before_start(
+        agent_state,
+        campaign_job=(job_config.get('experiment') or {}).get('kind') == 'four-swarm-campaign',
+    )
     agent = DefaultAgent(config)
     loop = asyncio.get_event_loop()
     task = loop.create_task(run_agent(agent, agent_state))
+    prepared_teams.track(agent_state, task)
 
     active_agents[agent_id] = {"agent": agent, "task": task, "state": agent_state}
 
@@ -613,6 +628,205 @@ async def execute_agent_tool(agent_id: str, request: ToolExecutionRequest):
     except Exception as e:
         logger.exception(f"Tool execution failed: {e}")
         return {"error": f"Tool execution failed: {str(e)}"}
+
+
+class TeamPreparationRequest(SimpleAgentRequest):
+    job_id: str
+    parent_id: str
+    instance_id: str
+
+
+class TeamOwnerRequest(BaseModel):
+    instance_id: str
+
+
+class TeamBudgetRequest(TeamOwnerRequest):
+    token_cap: int = Field(gt=0, strict=True)
+    max_agents: int = Field(ge=4, strict=True)
+
+
+class CampaignParentRequest(TeamOwnerRequest):
+    name: str
+    model: str
+    context: dict[str, Any]
+
+
+def _experiment_redis():
+    return state_manager._manager.redis_client
+
+
+def _experiment_tokens(job_id: str) -> int:
+    # Use the same global counter as both native platforms, with no per-team
+    # reset and no zero fallback when Redis or the counter is unavailable.
+    raw = _experiment_redis().hgetall(f'platform:usage:job:{job_id}:global')
+    values = [raw.get(name, raw.get(name.encode())) for name in ('input_tokens', 'output_tokens')]
+    if any(value is None for value in values):
+        raise ValueError('campaign usage counter is missing')
+    counts = [int(value) for value in values]
+    if any(value < 0 for value in counts):
+        raise ValueError('invalid campaign usage counter')
+    return sum(counts)
+
+
+def _team_owner(instance_id: str):
+    if instance_id != MANAGER_INSTANCE_ID:
+        raise HTTPException(409, 'Manager changed; reconcile campaign before proceeding')
+
+
+@app.put('/experiments/{job_id}/parent')
+async def prepare_campaign_parent(job_id: str, request: CampaignParentRequest):
+    """Register a passive native coordinator in an already prepared job.
+
+    The platform driver owns job/sandbox/Gateway creation. This endpoint never
+    launches a lifecycle or interprets the parent's text as a model task.
+    """
+    _team_owner(request.instance_id)
+    digest = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+    if job_id in prepared_campaign_parents:
+        record = prepared_campaign_parents[job_id]
+        if record['digest'] != digest:
+            raise HTTPException(409, 'Campaign parent contract changed')
+        if not record.get('ready'):
+            raise HTTPException(409, 'Campaign parent preparation incomplete; reconcile its identity')
+        return dict(instance_id=MANAGER_INSTANCE_ID, agent_id=record['agent_id'])
+    try:
+        raw = _experiment_redis().get(f'platform:job_config:{job_id}')
+        if not raw:
+            raise HTTPException(409, 'Platform must prepare the job before its teams')
+        import json
+        job = json.loads(raw)
+        if job.get('status') not in {'paused', 'prepared', 'initializing'}:
+            raise HTTPException(409, 'Platform job must be inactive during preparation')
+        config, state = agent_service.create_agent_config(
+            name=request.name, task='Passive coordinator for four-swarm campaign.',
+            job_id=job_id, model=request.model, context=request.context)
+        # Preserve the platform's native automatic/aggressive/execution setup.
+        # Agent creation itself must not silently replace these with defaults.
+        state.sandbox_info.update(job)
+        state.sandbox_info['job_id'] = job_id
+        config['node_data']['status'] = 'prepared'
+        prepared_campaign_parents[job_id] = dict(digest=digest, agent_id=state.agent_id, ready=False)
+        agent_service.register_agent_in_graph(state, config['node_data'], job_id)
+        state_manager.add_agent_state(state.agent_id, state)
+        if state_manager.get_agent_state(state.agent_id) is None:
+            raise RuntimeError('coordinator state was not persisted')
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, 'Campaign parent preparation failed; reconcile before retry') from exc
+    prepared_campaign_parents[job_id]['ready'] = True
+    return dict(instance_id=MANAGER_INSTANCE_ID, agent_id=state.agent_id)
+
+
+@app.put('/experiments/{job_id}/budget')
+async def prepare_team_budget(job_id: str, request: TeamBudgetRequest):
+    _team_owner(request.instance_id)
+    try:
+        if job_id not in prepared_teams.policies and any(
+            (data['state'].sandbox_info or {}).get('job_id') == job_id
+            and not data['task'].done() for data in active_agents.values()
+        ):
+            raise ValueError('prepare campaign budget before starting agents')
+        # HSETNX initializes a fresh counter without erasing existing usage.
+        client = _experiment_redis()
+        key = f'platform:usage:job:{job_id}:global'
+        if job_id not in prepared_teams.policies and not client.exists(key):
+            client.hsetnx(key, 'input_tokens', 0)
+            client.hsetnx(key, 'output_tokens', 0)
+        prepared_teams.configure(job_id, token_cap=request.token_cap,
+                                 max_agents=request.max_agents,
+                                 usage=lambda: _experiment_tokens(job_id))
+        status = prepared_teams.allowance(job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(503, 'Campaign usage accounting unavailable') from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID, **status)
+
+
+@app.get('/experiments/{job_id}/budget')
+async def team_budget(job_id: str, instance_id: str):
+    _team_owner(instance_id)
+    try:
+        status = prepared_teams.allowance(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, 'Campaign allowance not prepared') from exc
+    except Exception as exc:
+        raise HTTPException(503, 'Campaign usage accounting unavailable') from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID, **status)
+
+
+@app.put('/experiments/{job_id}/teams/{team_id}')
+async def prepare_team(job_id: str, team_id: str, request: TeamPreparationRequest):
+    _team_owner(request.instance_id)
+    if request.job_id != job_id or not team_id.strip():
+        raise HTTPException(422, 'Invalid campaign or team identity')
+    parent = active_agents.get(request.parent_id, {}).get('state')
+    if parent is None:
+        parent = state_manager.get_agent_state(request.parent_id)
+    if parent is None or (parent.sandbox_info or {}).get('job_id') != job_id:
+        raise HTTPException(409, 'Parent must belong to the prepared campaign')
+    permitted = (parent.context_data or {}).get('capabilities')
+    requested = (request.context or {}).get('capabilities')
+    if permitted is not None and (requested is None or not set(requested) <= set(permitted)):
+        raise HTTPException(409, 'Team capabilities exceed parent capabilities')
+    parent_scope = (parent.context_data or {}).get('scope')
+    if parent_scope and (request.context or {}).get('scope') != parent_scope:
+        raise HTTPException(409, 'Team scope must retain parent scope')
+    payload = request.model_dump(exclude={'instance_id'})
+
+    def build_team():
+        config, state = agent_service.create_agent_config(**payload)
+        config['job_config'] = {**(parent.sandbox_info or {}), **config['job_config']}
+        if (parent.context_data or {}).get('bounded_operation'):
+            state.context_data['bounded_operation'] = True
+            config['agent_config']['state'] = state.model_dump(mode='json')
+        return config, state
+
+    try:
+        record = prepared_teams.prepare(
+            (job_id, team_id), payload, build_team)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID,
+                **prepared_teams.status((job_id, team_id)))
+
+
+@app.post('/experiments/{job_id}/teams/{team_id}/activate')
+async def activate_team(job_id: str, team_id: str, request: TeamOwnerRequest):
+    _team_owner(request.instance_id)
+
+    def start(config, state):
+        agent_service.register_agent_in_graph(state, config['node_data'], job_id)
+        start_agent_task(config['agent_config'], config['job_config'])
+
+    try:
+        status = prepared_teams.activate((job_id, team_id), start)
+    except KeyError as exc:
+        raise HTTPException(404, 'Team not prepared') from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID, **status)
+
+
+@app.get('/experiments/{job_id}/teams/{team_id}')
+async def team_status(job_id: str, team_id: str, instance_id: str):
+    _team_owner(instance_id)
+    try:
+        status = prepared_teams.status((job_id, team_id))
+    except KeyError as exc:
+        raise HTTPException(404, 'Team not prepared') from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID, **status)
+
+
+@app.post('/experiments/{job_id}/teams/{team_id}/stop')
+async def stop_team(job_id: str, team_id: str, request: TeamOwnerRequest):
+    _team_owner(request.instance_id)
+    try:
+        status = await prepared_teams.stop((job_id, team_id), STOP_WAIT_SECONDS)
+    except KeyError as exc:
+        raise HTTPException(404, 'Team not prepared') from exc
+    return dict(instance_id=MANAGER_INSTANCE_ID, **status)
 
 
 if __name__ == "__main__":
