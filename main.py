@@ -31,9 +31,10 @@ active_agents: dict[str, dict[str, Any]] = {}
 MANAGER_INSTANCE_ID = uuid4().hex
 STOP_WAIT_SECONDS = 2.0
 
-from agent_framework.services.prepared_teams import PreparedTeams
+from agent_framework.services.prepared_teams import PreparedTeams, install_guard
 
 prepared_teams = PreparedTeams()
+install_guard(prepared_teams)
 prepared_campaign_parents: dict[str, dict] = {}
 
 

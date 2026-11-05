@@ -8,6 +8,38 @@ import hashlib
 import json
 
 
+class CampaignBudgetExhausted(RuntimeError):
+    """The campaign allowance is exhausted; the agent must stop calling."""
+
+
+_guard = None
+
+
+def install_guard(instance):
+    """Expose the manager's single allowance ledger to the model call path."""
+    global _guard
+    _guard = instance
+
+
+def enforce_budget(job_id):
+    """Block a model call once the campaign's observed allowance is spent.
+
+    The runner is the normal budget guard, but it can disappear while the
+    manager's agent tasks keep running (the interrupted I-P attempt reached
+    19.15M tokens after the driver was lost). This check runs in the manager
+    process, immediately before each provider call, so a lost runner cannot
+    turn the 12M ceiling into an advisory number. It is a post-response
+    measurement: one in-flight call may still overshoot by its own usage.
+    """
+    if _guard is None or not job_id or job_id not in _guard.policies:
+        return
+    status = _guard.allowance(job_id)
+    if status['exhausted']:
+        raise CampaignBudgetExhausted(
+            f"campaign {job_id!r} exhausted its {status['token_cap']} token "
+            f"allowance at {status['tokens']} observed tokens")
+
+
 class PreparedTeams:
     def __init__(self):
         self.records = {}

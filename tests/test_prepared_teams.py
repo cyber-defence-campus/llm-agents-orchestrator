@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_framework.services.prepared_teams import PreparedTeams
+from agent_framework.services.prepared_teams import (
+    CampaignBudgetExhausted, PreparedTeams, enforce_budget, install_guard)
 
 
 def state(agent='root', parent=None):
@@ -15,6 +16,23 @@ def prepared():
     registry = PreparedTeams()
     registry.prepare(('job', 'O1'), {'task': 'one'}, lambda: ({}, state()))
     return registry
+
+
+def test_the_manager_guard_blocks_calls_after_the_campaign_cap():
+    registry = PreparedTeams()
+    usage = [0]
+    registry.configure('job', token_cap=10, max_agents=4,
+                       usage=lambda: usage[0])
+    install_guard(registry)
+    try:
+        enforce_budget('job')
+        usage[0] = 10
+        with pytest.raises(CampaignBudgetExhausted):
+            enforce_budget('job')
+        # A non-campaign job keeps its ordinary call path.
+        enforce_budget('ordinary')
+    finally:
+        install_guard(None)
 
 
 def test_prepare_idempotent_and_conflict_does_not_rebuild():

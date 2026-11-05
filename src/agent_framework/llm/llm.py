@@ -16,6 +16,8 @@ from jinja2 import (
 from litellm import ModelResponse, completion_cost
 from litellm.utils import supports_prompt_caching
 
+from agent_framework.services.prepared_teams import enforce_budget
+
 _DEEPSEEK_V4_PRICES = {
     "input_cost_per_token": 0.14e-6,
     "output_cost_per_token": 0.28e-6,
@@ -449,6 +451,9 @@ class LLM:
         job_id: str | None = None,
         step_number: int = 1,
     ) -> LLMResponse:
+        # The manager-side guard is the last line of defence if the runner
+        # disappears while a campaign's model calls are still in flight.
+        enforce_budget(self.job_id or job_id)
         messages = []
         model_name = self.config.model_name or ""
         is_gemini_model = "gemini" in model_name.lower()
