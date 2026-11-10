@@ -40,6 +40,72 @@ def test_below_threshold_nothing_folds():
     assert len(ctx.messages) == 21  # task + 10 x (assistant+user)
 
 
+def test_large_history_compacts_before_fifty_iterations():
+    ctx = AgentContext()
+    ctx.append_message('user', 'Current Objective: <task>retain the receipt</task>')
+    for index in range(12):
+        ctx.append_message('assistant', f'action {index}')
+        ctx.append_message('user', 'observation ' + 'x' * 12000)
+    ctx.iteration = 12
+    assert ctx.needs_compaction()
+    assert ctx.compact(force=True) > 0
+    assert sum(len(str(m['content'])) for m in ctx.messages) < 50000
+    assert '<task>retain the receipt</task>' in ctx.messages[0]['content']
+
+
+def test_latest_knowledge_is_one_replaceable_view_without_mutating_evidence():
+    ctx = AgentContext()
+    first = {'ok': True, 'capability': 'read_file', 'content': 'the read result',
+             'knowledge': {'position': '10.0.0.1', 'hosts': [{'ip': '10.0.0.1'}],
+                           'file_contents': [{'path': '/note', 'content': 'private body'}]}}
+    ctx.record_tool_result('read_file', {'path': '/note'}, first)
+    projected = ctx.without_execution_snapshot(first)
+    assert 'knowledge' in first and 'knowledge' not in projected
+    assert projected['content'] == 'the read result'
+    ctx.observe_execution_state({'result': {'ok': True, 'capability': 'run',
+        'knowledge': {'position': '10.0.0.2', 'hosts': [{'ip': '10.0.0.2'}]}}})
+    history = ctx.get_history_for_llm()
+    assert len(history) == 1
+    assert '10.0.0.2' in history[-1]['content']
+    assert '10.0.0.1' not in history[-1]['content']
+    assert 'private body' not in history[-1]['content']
+
+
+def test_a_rejected_context_change_replaces_the_old_host_view():
+    ctx = AgentContext()
+    ctx.observe_execution_state({'capability': 'read_file',
+        'carrier_context': {'position': 'host-a', 'host_generation': 'a'},
+        'knowledge': {'position': 'host-a', 'hosts': ['old-host-evidence']}})
+    ctx.observe_execution_state({'ok': False, 'capability': 'read_file',
+        'carrier_context': {'position': 'host-b', 'host_generation': 'b'},
+        'code': 'carrier_context_changed'})
+    assert ctx.observed_execution_state['position'] == 'host-b'
+    assert ctx.observed_execution_state['knowledge_refresh_required'] is True
+    assert 'old-host-evidence' not in str(ctx.observed_execution_state)
+
+
+def test_raw_shell_fallback_is_recorded_only_for_intents_native_campaigns():
+    ctx = AgentContext(context={'native_execution_profile': 'intents-served-v3'})
+    ctx.record_tool_use({'toolName': 'run_shell_command', 'args': {'command': 'id'}})
+    ctx.record_tool_use({'toolName': 'terminal', 'args': {'command': 'id'}})
+    assert ctx.tactical_memory['raw_shell_fallback_attempts'] == 1
+    ordinary = AgentContext(context={'native_execution_profile': 'tactics-served-v3'})
+    ordinary.record_tool_use({'toolName': 'run_shell_command', 'args': {'command': 'id'}})
+    assert 'raw_shell_fallback_attempts' not in ordinary.tactical_memory
+
+
+def test_terminal_fallback_route_survives_the_tool_envelope_and_compaction():
+    ctx = AgentContext(context={'native_execution_profile':'intents-served-v3.1'})
+    ctx.record_tool_result('terminal',{'command':'id'},
+        {'result':{'ok':False,'execution_route':'sandbox_fallback','error':'transport closed'}},is_error=True)
+    assert ctx.tactical_memory['terminal_fallback_attempts']==1
+    assert ctx.tactical_memory['last_execution_route']=='sandbox_fallback'
+    ctx.record_tool_result('wait_operation',{'operation_id':'observed'},
+        {'result':{'ok':True,'execution_route':'gateway_control'}})
+    assert ctx.tactical_memory['terminal_fallback_attempts']==1
+    assert ctx.tactical_memory['last_execution_route']=='gateway_control'
+
+
 def test_over_threshold_keeps_task_tail_and_digest():
     ctx = _build(turns=60)
     folded = ctx.compact()

@@ -4,9 +4,12 @@ from agent_framework.tools.registry import ToolRegistry, register_tool, get_tool
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    ToolRegistry.instance().clear()
+    registry = ToolRegistry.instance()
+    original = dict(registry._registry)
+    registry.clear()
     yield
-    ToolRegistry.instance().clear()
+    registry.clear()
+    registry._registry.update(original)
 
 
 def test_tool_exclusion():

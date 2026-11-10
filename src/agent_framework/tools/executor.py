@@ -1118,6 +1118,17 @@ async def process_tool_invocations(
             "tool_name": tool_name,
             "isError": is_error,
         }
+        profile = (getattr(agent_state, 'context_data', None) or {}).get('native_execution_profile', '')
+        if tool_name == 'run_shell_command' and str(profile).startswith('intents-'):
+            result_content_for_history['execution_route'] = 'sandbox_fallback'
+        elif str(profile).startswith('intents-'):
+            routed = result
+            for _ in range(4):
+                if not isinstance(routed,dict): break
+                if routed.get('execution_route'):
+                    result_content_for_history['execution_route'] = routed['execution_route']
+                    break
+                routed = routed.get('result')
 
         if is_error:
             try:
@@ -1159,7 +1170,11 @@ async def process_tool_invocations(
 
         context = getattr(agent_state, 'context_data', None) or {}
         native = context.get('native_audit', {}).get('kind') == 'arena-readonly-audit-v1'
-        observation_xml, images = _format_tool_result(tool_name, result, 65536 if native else 10000)
+        view_result = result
+        if agent_state is not None and hasattr(agent_state, 'observe_execution_state'):
+            agent_state.observe_execution_state(result)
+            view_result = agent_state.without_execution_snapshot(result)
+        observation_xml, images = _format_tool_result(tool_name, view_result, 65536 if native else 10000)
         observation_parts.append(observation_xml)
         all_images.extend(images)
 

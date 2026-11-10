@@ -173,7 +173,10 @@ class BaseAgent:
                     continue
 
                 self.context.iteration += 1
-                if self.context.iteration > 0 and self.context.iteration % 50 == 0:
+                stats = getattr(self.llm, "usage_stats", {})
+                usage = stats.get("last_request", {}) if isinstance(stats, dict) else {}
+                tokens = usage.get("input_tokens", 0)
+                if self.context.needs_compaction(int(tokens) if isinstance(tokens, (int, float)) else 0):
                     await self._compact_memory()
 
                 try:
@@ -482,10 +485,10 @@ class BaseAgent:
     async def _compact_memory(self):
         """Fold old exchanges into a digest so the prompt stops growing.
 
-        Called every 50 iterations; the trigger threshold lives on the
-        context so short sessions never pay for it.
+        Checked every iteration, with the same size/token policy on both
+        platforms. Long tool outputs need not wait for a fiftieth turn.
         """
-        folded = self.context.compact()
+        folded = self.context.compact(force=True)
         if folded:
             logger.info(
                 "Context compacted: %s earlier exchanges folded into a "
