@@ -2,6 +2,7 @@ from typing import Any, Optional, Dict
 
 from agent_framework.tools import register_tool
 from .terminal_manager import get_terminal_manager
+from .session_scope import scoped_terminal_id
 
 # Unbounded, one wrong number parks an agent for hours and reads exactly like a
 # hang: a model that took the unit for milliseconds asked for 15000 and would
@@ -28,7 +29,7 @@ async def run_shell_command(
         command: The command string to execute.
         require_input: Whether this execution provides input to a running process.
         exec_timeout: Maximum time in seconds to wait for completion.
-        session_id: Identifier for the terminal session (defaults to 'default').
+        session_id: Persistent label private to this agent.
         terminal_id: Alias for session_id.
         suppress_newline: If True, does not send a newline character at the end.
         agent_state: The agent state object, injected by the executor.
@@ -40,7 +41,10 @@ async def run_shell_command(
     if agent_state and hasattr(agent_state, "agent_id"):
         default_session = agent_state.agent_id
 
-    target_session = session_id or terminal_id or default_session
+    target_session = scoped_terminal_id(
+        getattr(agent_state, "agent_id", None), session_id or terminal_id)
+    if agent_state is None:
+        target_session = session_id or terminal_id or default_session
 
     capped = exec_timeout
     if exec_timeout is not None and exec_timeout > MAX_EXEC_TIMEOUT:

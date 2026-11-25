@@ -21,6 +21,7 @@ from .registry import (
     should_execute_in_sandbox,
 )
 from .argument_parser import convert_arguments, ArgumentConversionError
+from .invocation import invocation_scope
 
 
 # AGENT_SANDBOX_MODE: whether sandbox tools are enabled (for prompts/registration)
@@ -38,6 +39,16 @@ logger = logging.getLogger("agent_framework.tools")
 # and never sees a fix made in this tree. This is the one choke point every
 # execution path passes through.
 MAX_EXEC_TIMEOUT = 900.0
+
+def _scope_terminal_kwargs(tool_name, kwargs, agent_state):
+    result = kwargs.copy()
+    if tool_name == 'run_shell_command' and agent_state is not None:
+        from .terminal.session_scope import scoped_terminal_id
+        result['session_id'] = scoped_terminal_id(
+            agent_state.agent_id, result.get('session_id') or result.get('terminal_id'))
+        result.pop('terminal_id', None)
+    return result
+
 
 # TACTICS's operator container is dual-homed: the lab interface is joined at
 # run time, while the platform interface can see unrelated services. A prose
@@ -169,6 +180,13 @@ def _tool_contract_error(
     context = getattr(agent_state, "context_data", None)
     if not isinstance(context, dict):
         return None
+    if (context.get("native_execution_profile") == "abs.native/1-draft" and tool_name not in {
+            "native_http_request", "native_operation_status", "native_wait_operation", "native_cancel_operation",
+            "dispatch_agent_msg", "enter_wait_mode", "complete_assignment"}):
+        return "Tool is outside the native profile; raw execution is not permitted"
+    if (context.get("native_execution_profile") in {"abs.operation/1-draft","abs.work/1-draft"}
+            and tool_name not in ({"typed_work", "complete_assignment"} if context.get("native_execution_profile")=="abs.work/1-draft" else {"operation_exec", "operation_inspect", "operation_cancel", "complete_assignment"})):
+        return "Tool is outside the strict operation profile; no terminal fallback is permitted"
     # An autonomous coordinator may need to yield briefly while a delegated
     # worker finishes, but a child must never park a live branch. The wait
     # implementation clamps the coordinator's timeout to a small bound; this
@@ -264,7 +282,7 @@ async def _dispatch_tool(
             if command and command.strip() and not command.strip().startswith("#"):
                 job_id = None
                 if agent_state and hasattr(agent_state, "sandbox_info") and agent_state.sandbox_info:
-                    job_id = agent_state.sandbox_info.get("job_id")
+                    job_id = (getattr(agent_state,"sandbox_info",None) or {}).get("job_id")
                 log_command(command, agent_id=agent_id_log, job_id=job_id)
         except Exception as e:
             logger.error(f"Failed to audit shell command in executor: {e}")
@@ -299,7 +317,7 @@ async def _dispatch_tool(
                 and hasattr(agent_state, "sandbox_info")
                 and agent_state.sandbox_info
             ):
-                if agent_state.sandbox_info.get("job_id"):
+                if (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"):
                     job_id_status = "present"
 
             error_details = f"AGENT_SANDBOX_URL='{sandbox_url}', job_id={job_id_status}"
@@ -376,7 +394,7 @@ async def _try_local_orchestration(
 
             if agent_state:
                 _publish_tool_event(
-                    agent_state.sandbox_info.get("job_id"),
+                    (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                     "tool_call",
                     agent_state.agent_id,
                     tool_name,
@@ -397,7 +415,7 @@ async def _try_local_orchestration(
 
                 if agent_state:
                     _publish_tool_event(
-                        agent_state.sandbox_info.get("job_id"),
+                        (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                         "tool_result",
                         agent_state.agent_id,
                         tool_name,
@@ -410,7 +428,7 @@ async def _try_local_orchestration(
                 error_msg = str(e)
                 if agent_state:
                     _publish_tool_event(
-                        agent_state.sandbox_info.get("job_id"),
+                        (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                         "tool_error",
                         agent_state.agent_id,
                         tool_name,
@@ -449,7 +467,7 @@ async def _try_direct_sandbox_execution(
         )
         return None
 
-    job_id = agent_state.sandbox_info.get("job_id")
+    job_id = (getattr(agent_state,"sandbox_info",None) or {}).get("job_id")
     if not job_id:
         logger.warning(
             f"No job_id in sandbox_info for direct sandbox execution of '{tool_name}'"
@@ -469,7 +487,7 @@ async def _try_direct_sandbox_execution(
             f"Executing '{tool_name}' via direct sandbox connection (job_id={job_id})"
         )
 
-        remote_kwargs = kwargs.copy()
+        remote_kwargs = _scope_terminal_kwargs(tool_name, kwargs, agent_state)
         remote_kwargs.pop("tool_call_id", None)
         remote_kwargs.pop("tool_result_id", None)
 
@@ -543,7 +561,7 @@ async def _delegate_tool_to_core_api(
             f"Agent state missing sandbox_info for tool '{tool_name}'. State: {agent_state}"
         )
 
-    job_id = agent_state.sandbox_info.get("job_id")
+    job_id = (getattr(agent_state,"sandbox_info",None) or {}).get("job_id")
     if not job_id:
         raise ValueError(
             f"job_id not found in agent_state.sandbox_info for tool '{tool_name}'."
@@ -553,7 +571,7 @@ async def _delegate_tool_to_core_api(
     correlation_id = f"corr-{generate_ulid()[:12]}"
 
     # STRIP IDs from kwargs to prevent crashes in older sandboxes
-    remote_kwargs = kwargs.copy()
+    remote_kwargs = _scope_terminal_kwargs(tool_name, kwargs, agent_state)
     t_call_id = remote_kwargs.pop("tool_call_id", None)
     t_result_id = remote_kwargs.pop("tool_result_id", None)
 
@@ -710,7 +728,7 @@ async def _execute_tool_locally(
 
     if agent_state:
         _publish_tool_event(
-            agent_state.sandbox_info.get("job_id"),
+            (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
             "tool_call",
             agent_id,
             tool_name,
@@ -724,7 +742,7 @@ async def _execute_tool_locally(
         logger.error(error_msg)
         if agent_state:
             _publish_tool_event(
-                agent_state.sandbox_info.get("job_id"),
+                (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                 "tool_error",
                 agent_id,
                 tool_name,
@@ -755,7 +773,7 @@ async def _execute_tool_locally(
         logger.warning(f"Argument conversion failed for tool '{tool_name}': {e}")
         if agent_state:
             _publish_tool_event(
-                agent_state.sandbox_info.get("job_id"),
+                (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                 "tool_error",
                 agent_id,
                 tool_name,
@@ -766,22 +784,23 @@ async def _execute_tool_locally(
         return {"error": error_msg, "type": "ArgumentError"}
 
     try:
-        if needs_agent_state(tool_name):
-            if agent_state is None and not sandbox_mode_enabled:
-                raise ValueError(
-                    f"Tool '{tool_name}' requires agent_state but none was provided."
-                )
-            result = tool_func(agent_state=agent_state, **converted_kwargs)
-        else:
-            filtered_kwargs = {
-                k: v for k, v in converted_kwargs.items() if k != "agent_state"
-            }
-            if inspect.iscoroutinefunction(tool_func):
-                result = tool_func(**filtered_kwargs)
+        with invocation_scope(agent_id, tool_call_id):
+            if needs_agent_state(tool_name):
+                if agent_state is None and not sandbox_mode_enabled:
+                    raise ValueError(
+                        f"Tool '{tool_name}' requires agent_state but none was provided."
+                    )
+                result = tool_func(agent_state=agent_state, **converted_kwargs)
             else:
-                result = asyncio.to_thread(tool_func, **filtered_kwargs)
+                filtered_kwargs = {
+                    k: v for k, v in converted_kwargs.items() if k != "agent_state"
+                }
+                if inspect.iscoroutinefunction(tool_func):
+                    result = tool_func(**filtered_kwargs)
+                else:
+                    result = asyncio.to_thread(tool_func, **filtered_kwargs)
 
-        final_result = await result if inspect.isawaitable(result) else result
+            final_result = await result if inspect.isawaitable(result) else result
 
         result_for_log = str(final_result)
         if len(result_for_log) > 1000:
@@ -799,7 +818,7 @@ async def _execute_tool_locally(
                 event_result = str(event_result)
 
             _publish_tool_event(
-                agent_state.sandbox_info.get("job_id"),
+                (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                 "tool_result",
                 agent_id,
                 tool_name,
@@ -816,7 +835,7 @@ async def _execute_tool_locally(
 
         if agent_state:
             _publish_tool_event(
-                agent_state.sandbox_info.get("job_id"),
+                (getattr(agent_state,"sandbox_info",None) or {}).get("job_id"),
                 "tool_error",
                 agent_id,
                 tool_name,
@@ -865,16 +884,9 @@ async def execute_tool_invocation(
 
 
 def _check_error_result(result: Any) -> tuple[bool, Any]:
-    is_error = False
-    error_payload: Any = None
-
-    if (isinstance(result, dict) and result.get("error")) or (
-        isinstance(result, str) and result.strip().lower().startswith("error:")
-    ):
-        is_error = True
-        error_payload = result
-
-    return is_error, error_payload
+    from .outcomes import execution_failed
+    failed = execution_failed(result)
+    return failed, result if failed else None
 
 
 def extract_screenshot_from_result(result: Any) -> str | None:
@@ -902,6 +914,8 @@ def _format_tool_result(
 ) -> tuple[str, list[dict[str, Any]]]:
     images: list[dict[str, Any]] = []
     result_for_llm: Any
+    operation_envelope=(isinstance(result,dict) and result.get("protocol") in ("abs.operation/1-draft","abs.work/1-draft","abs.native/1-draft")
+                        and result.get("type") in ("status","error"))
 
     screenshot_data = extract_screenshot_from_result(result)
     if screenshot_data:
@@ -915,11 +929,11 @@ def _format_tool_result(
     else:
         result_for_llm = result
 
-    if isinstance(result_for_llm, dict):
+    if isinstance(result_for_llm, dict) and not operation_envelope:
         if "result" in result_for_llm:
             result_for_llm = result_for_llm["result"]
 
-    if isinstance(result_for_llm, dict):
+    if isinstance(result_for_llm, dict) and not operation_envelope:
         if result_for_llm.get("agent_completed"):
             result_for_llm = result_for_llm.get(
                 "message", "Agent task marked as completed."
@@ -988,13 +1002,29 @@ def _deduplicate_invocations(
     return unique
 
 
+def prepare_host_invocations(invocations, *, preserve=False):
+    """Host-only metadata; never accept IDs embedded in model arguments."""
+    batch=[]
+    for item in invocations:
+        batch.append(dict(toolName=item.get("toolName"),args=dict(item.get("args") or {}),
+            host_call_id=(item.get("host_call_id") if preserve else None) or f"call_{generate_ulid()}",
+            host_result_id=(item.get("host_result_id") if preserve else None) or f"result_{generate_ulid()}"))
+    return batch
+
+
 async def process_tool_invocations(
     tool_invocations: list[dict[str, Any]],
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
 ) -> bool:
-    tool_invocations = _deduplicate_invocations(tool_invocations)
-    logger.info(f"Processing {len(tool_invocations)} tool invocation(s) in parallel.")
+    # The strict profile deduplicates transport replays by HOST call identity.
+    # Distinct planned calls must not be silently merged by argument equality.
+    strict_profile=(getattr(agent_state,"context_data",None) or {}).get("native_execution_profile")in {"abs.operation/1-draft","abs.work/1-draft","abs.native/1-draft"}
+    if not strict_profile:
+        tool_invocations = _deduplicate_invocations(tool_invocations)
+    else:
+        tool_invocations = prepare_host_invocations(tool_invocations,preserve=True)
+    logger.info(f"Processing {len(tool_invocations)} tool invocation(s) in declared order.")
     logger.debug(f"Raw tool_invocations: {tool_invocations}")
 
     observation_parts: list[str] = []
@@ -1008,8 +1038,8 @@ async def process_tool_invocations(
         tool_name = tool_inv.get("toolName", "unknown")
         tool_args = tool_inv.get("args", {})
 
-        tool_call_id = f"call_{generate_ulid()}"
-        tool_result_id = f"result_{generate_ulid()}"
+        tool_call_id = tool_inv["host_call_id"] if strict_profile else f"call_{generate_ulid()}"
+        tool_result_id = tool_inv["host_result_id"] if strict_profile else f"result_{generate_ulid()}"
 
         # Inject IDs into args so they flow down to execution
         tool_args["tool_call_id"] = tool_call_id
@@ -1032,7 +1062,18 @@ async def process_tool_invocations(
             f"Appended structured tool_call to history for '{tool_name}' (ID: {tool_call_id})"
         )
 
-        tasks.append(execute_tool_invocation(tool_inv, agent_state))
+        async def audited(invocation):
+            from .audit_journal import record
+            await record(agent_state, invocation, 'started')
+            try:
+                value = await execute_tool_invocation(invocation, agent_state)
+            except BaseException as error:
+                # Cancellation is evidence too; preserve it before propagating.
+                await record(agent_state, invocation, 'failed', error=error)
+                raise
+            await record(agent_state, invocation, 'finished', result=value)
+            return value
+        tasks.append(lambda invocation=tool_inv: audited(invocation))
 
     # One turn can carry several tool calls, and gathering them ran the lot
     # concurrently. A beacon-backed capability cannot take that: its wire is
@@ -1042,7 +1083,7 @@ async def process_tool_invocations(
     results = []
     for task in tasks:
         try:
-            results.append(await task)
+            results.append(await task())
         except Exception as error:  # preserved for the reporting loop below
             results.append(error)
 

@@ -242,6 +242,16 @@ class RedisStateManager:
         if self._is_connected():
             self.client.set(self.KEY_ROOT_ID, agent_id, nx=True)
 
+    def checkpoint_agent_state(self, agent_id: str, state: "AgentContext"):
+        """Required checkpoint: failures propagate before remote dispatch.
+
+        Redis persistence/availability belongs to the deployment contract.
+        This is distinct from best-effort UI state/event publication below.
+        """
+        if not self._is_connected():
+            raise RuntimeError("agent checkpoint store unavailable")
+        self.client.hset(self.KEY_STATES_HASH, agent_id, state.model_dump_json())
+
     def add_agent_state(self, agent_id: str, state: "AgentContext"):
         if not self._is_connected():
             return
@@ -369,6 +379,7 @@ add_edge = _manager.add_edge
 get_all_edges = _manager.get_all_edges
 set_root_agent_id = _manager.set_root_agent_id
 add_agent_state = _manager.add_agent_state
+checkpoint_agent_state = _manager.checkpoint_agent_state
 get_agent_state = _manager.get_agent_state
 delete_agent = _manager.delete_agent
 get_paginated_agent_nodes = _manager.get_paginated_agent_nodes

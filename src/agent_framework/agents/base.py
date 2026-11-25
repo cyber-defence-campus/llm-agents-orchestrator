@@ -244,6 +244,9 @@ class BaseAgent:
             self.context.append_message("user", formatted_task)
 
     async def _execute_cycle(self) -> bool:
+        if (self.context.context_data.get("native_execution_profile")in {"abs.operation/1-draft","abs.work/1-draft","abs.native/1-draft"}
+                and self.context.pending_tool_invocations):
+            return await self._dispatch_tools(self.context.pending_tool_invocations,resume=True)
         prompt_history = self.context.get_history_for_llm()
 
         try:
@@ -305,9 +308,19 @@ class BaseAgent:
         )
         return False
 
-    async def _dispatch_tools(self, tool_list: List[Dict[str, Any]]) -> bool:
-        for t in tool_list:
-            self.context.record_tool_use(t)
+    async def _dispatch_tools(self, tool_list: List[Dict[str, Any]], *, resume=False) -> bool:
+        strict=self.context.context_data.get("native_execution_profile")in {"abs.operation/1-draft","abs.work/1-draft","abs.native/1-draft"}
+        if strict:
+            from agent_framework.tools.executor import prepare_host_invocations
+            tool_list=prepare_host_invocations(tool_list,preserve=resume)
+            self.context.pending_tool_invocations=tool_list
+        if not resume:
+            for t in tool_list:
+                self.context.record_tool_use(t)
+        if strict:
+            # Snapshot before creating any remote-dispatch task. A failed
+            # checkpoint leaves this exact batch pending for reconciliation.
+            await asyncio.to_thread(db.checkpoint_agent_state,self.context.agent_id,self.context.model_copy(deep=True))
 
         current_history = (
             self.context.messages
@@ -325,6 +338,14 @@ class BaseAgent:
             raise
         finally:
             self._active_tool_task = None
+
+        if strict:
+            self.context.pending_tool_invocations=[]
+            try:
+                await asyncio.to_thread(db.checkpoint_agent_state,self.context.agent_id,self.context.model_copy(deep=True))
+            except BaseException:
+                self.context.pending_tool_invocations=tool_list
+                raise
 
         return should_terminate
 

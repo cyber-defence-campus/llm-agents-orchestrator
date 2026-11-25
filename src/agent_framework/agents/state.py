@@ -14,7 +14,7 @@ def _new_agent_id() -> str:
 # Read-only coordination: they report on the agent tree's own state and reach
 # no target, so repeating them is supervision rather than a loop.
 SUPERVISION_TOOLS = frozenset(
-    {"inspect_agent_tree", "get_findings", "get_actions", "enter_wait_mode"}
+    {"inspect_agent_tree", "get_findings", "get_actions", "enter_wait_mode", "operation_inspect"}
 )
 
 class AgentContext(BaseModel):
@@ -44,6 +44,9 @@ class AgentContext(BaseModel):
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     context_data: Dict[str, Any] = Field(default_factory=dict, alias="context")
     tool_history: List[Dict[str, Any]] = Field(default_factory=list)
+    # Strict operation profile: checkpointed host identities before dispatch.
+    # Recovery replays this batch, never guesses equivalence from arguments.
+    pending_tool_invocations: List[Dict[str, Any]] = Field(default_factory=list)
     observations: List[Dict[str, Any]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
     # Durable, bounded operational memory. Unlike the transcript, this keeps
@@ -304,15 +307,8 @@ class AgentContext(BaseModel):
 
     @staticmethod
     def _result_failed(result: Any, is_error: bool) -> bool:
-        if is_error:
-            return True
-        if not isinstance(result, dict):
-            return False
-        if result.get("ok") is False or result.get("success") is False:
-            return True
-        return str(result.get("status", "")).lower() in {
-            "error", "failed", "failure",
-        }
+        from agent_framework.tools.outcomes import execution_failed
+        return bool(is_error) or execution_failed(result)
 
     @staticmethod
     def _action_signature(tool_name: str, args: Dict[str, Any]) -> str:
